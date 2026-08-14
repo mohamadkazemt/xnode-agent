@@ -1,34 +1,57 @@
 # Deployment
 
-## Production prerequisites
+## Requirements
 
-- Linux with systemd and `/proc`.
-- `git` and `python3`.
-- Go 1.26+ (required by the pinned Xray v26.7.28 source; the installer checks this).
-- outbound access to the official XTLS/Xray-core repository during the build.
+- Linux on `amd64` or `arm64`.
+- systemd for a live install (`--no-start` is intended for CI and image builds).
+- `curl` or `wget`, `python3`, `tar`, and `sha256sum` (or `shasum`).
 
-## Install
+Debian and Ubuntu provide these packages out of the box or through `apt`. The
+installer otherwise avoids distribution-specific package management.
 
-Create an agent config from `examples/agent.json`, use a unique panel token, then:
+## One-line install
+
+Interactive installation of the latest GitHub release:
 
 ```bash
-sudo ./scripts/install.sh /path/to/agent.json
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/mohamadkazemt/xnode-agent/main/scripts/install.sh)"
 ```
 
-Installed paths:
+Piped input cannot be used for prompts. Use flags for unattended installation:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mohamadkazemt/xnode-agent/main/scripts/install.sh | \
+  sudo bash -s -- --node-id node-12 --panel-url https://panel.example.com --panel-token 'UNIQUE_NODE_TOKEN'
+```
+
+To install a prepared config or pin a release:
+
+```bash
+sudo bash scripts/install.sh --config ./agent.json --version v1.0.1
+```
+
+Supported options are `--node-id`, `--panel-url`, `--panel-token`, `--config`,
+`--version`, `--force`, and `--no-start`. Existing `/etc/xnode/agent.json` is
+never replaced unless `--force` is provided. Do not put real tokens in the repo
+or shell history; a root-readable config file is preferable for automation.
+
+The installer resolves the latest release unless `--version` is supplied,
+detects `amd64`/`arm64`, downloads both release assets, verifies the archive
+against `SHA256SUMS`, and installs:
 
 ```text
 /usr/local/bin/xnode-agent
 /usr/local/bin/xray
-/etc/xnode/agent.json
-/etc/xnode/xray.json
-/var/lib/xnode/state.json
-/var/lib/xnode/limits.json
+/etc/xnode/agent.json             (0600)
+/etc/systemd/system/xnode-agent.service
+/etc/logrotate.d/xnode
 /var/lib/xnode/traffic-spool/
-/var/log/xnode/xray-access.log
+/var/log/xnode/
 ```
 
-The installer enables `xnode-agent.service`; the agent is the parent process that starts and monitors Xray.
+Configuration and data directories are mode `0700`. If file installation,
+service startup, or the local health check fails, previous managed files are
+restored and the failed installation is removed.
 
 ## Verify
 
@@ -36,19 +59,30 @@ The installer enables `xnode-agent.service`; the agent is the parent process tha
 systemctl status xnode-agent
 curl -fsS http://127.0.0.1:19090/healthz
 curl -fsS http://127.0.0.1:19090/readyz
-curl -fsS http://127.0.0.1:19090/status | jq
+curl -fsS http://127.0.0.1:19090/status
 ```
 
-If strict policies are configured, verify heartbeat `strict_limits_ready:true`. When `require_patched_core:true`, absence of the patch marker makes the node unhealthy instead of silently claiming strict enforcement.
+## Upgrade
 
-## Rollback
+Run the installer again with `--force`. The existing managed files are backed up
+for the duration of the transaction and restored if the upgrade fails. Use
+`--version vX.Y.Z` to pin or roll back to a specific published release.
 
-Every accepted complete Xray config is validated before activation. The manager keeps `<xray_config>.last-good`. If a replacement cannot start, it restores and starts the previous known-good config.
+## Uninstall
 
-## Upgrading Xray
+```bash
+sudo bash scripts/uninstall.sh
+```
 
-Do not simply change the patch directory/tag. Create a new pinned patch directory, update anchors as needed, and require the `xray-patch` GitHub Actions job to test the dispatcher package and compile the complete Xray binary against the new official tag.
+This removes binaries and service integration but preserves configuration,
+state, and logs. Remove those too only when intentionally decommissioning a node:
+
+```bash
+sudo bash scripts/uninstall.sh --purge
+```
 
 ## Firewall
 
-Expose only the actual Xray inbound ports. Do **not** expose the Xray API (`127.0.0.1:10085`) or the agent status listener (`127.0.0.1:19090`).
+Expose only Xray inbound ports. Do not expose the Xray API
+(`127.0.0.1:10085`) or agent status listener (`127.0.0.1:19090`).
+
