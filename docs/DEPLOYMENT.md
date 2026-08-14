@@ -1,5 +1,7 @@
 # Deployment
 
+[English](DEPLOYMENT.md) | [فارسی](fa/DEPLOYMENT.md)
+
 ## Requirements
 
 - Linux on `amd64` or `arm64`.
