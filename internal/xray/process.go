@@ -34,30 +34,119 @@ func (m *Manager) Validate(ctx context.Context, candidate string) error {
 	return nil
 }
 
-func (m *Manager) Apply(ctx context.Context, content []byte) (bool, error) {
+// ValidateContent validates a complete desired Xray config without replacing
+// the active config file or restarting the process.
+func (m *Manager) ValidateContent(ctx context.Context, content []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(m.Config), 0o755); err != nil {
-		return false, err
-	}
+	return m.validateContentLocked(ctx, content)
+}
+
+// Store validates and atomically persists a config without restarting Xray.
+// It is used after a successful HandlerService hot reload so a later restart
+// comes back with exactly the same desired state.
+func (m *Manager) Store(ctx context.Context, content []byte) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if old, err := os.ReadFile(m.Config); err == nil && hash(old) == hash(content) {
 		return false, nil
 	}
-	tmp := m.Config + ".candidate"
-	if err := os.WriteFile(tmp, content, 0o600); err != nil {
+	if err := m.validateContentLocked(ctx, content); err != nil {
 		return false, err
 	}
-	if err := m.Validate(ctx, tmp); err != nil {
-		_ = os.Remove(tmp)
+	if err := m.writeConfigLocked(content); err != nil {
 		return false, err
 	}
-	if err := os.Rename(tmp, m.Config); err != nil {
+	return true, nil
+}
+
+func (m *Manager) Apply(ctx context.Context, content []byte) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if old, err := os.ReadFile(m.Config); err == nil && hash(old) == hash(content) {
+		return false, nil
+	}
+	if err := m.validateContentLocked(ctx, content); err != nil {
+		return false, err
+	}
+	if err := m.writeConfigLocked(content); err != nil {
 		return false, err
 	}
 	if err := m.restartLocked(); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// ForceApply validates, persists, and restarts even when the file on disk
+// already matches. It is the safety fallback when a partial hot reload fails.
+func (m *Manager) ForceApply(ctx context.Context, content []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.validateContentLocked(ctx, content); err != nil {
+		return err
+	}
+	if err := m.writeConfigLocked(content); err != nil {
+		return err
+	}
+	return m.restartLocked()
+}
+
+func (m *Manager) validateContentLocked(ctx context.Context, content []byte) error {
+	if err := os.MkdirAll(filepath.Dir(m.Config), 0o755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(m.Config), ".xnode-candidate-*.json")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	defer os.Remove(name)
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return m.Validate(ctx, name)
+}
+
+func (m *Manager) writeConfigLocked(content []byte) error {
+	if err := os.MkdirAll(filepath.Dir(m.Config), 0o755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(m.Config), ".xnode-config-*.json")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(name)
+		}
+	}()
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(name, m.Config); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
 
 func (m *Manager) Start() error {
