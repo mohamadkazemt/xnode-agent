@@ -20,6 +20,7 @@ jobs:
           bash -n scripts/install.sh scripts/uninstall.sh
           shellcheck scripts/install.sh scripts/uninstall.sh
       - name: Smoke install release without systemd
+        shell: bash
         run: |
           if ! output=$(bash scripts/install.sh --version v1.0.1 --node-id ci-node --panel-url https://panel.example.com --panel-token CI_ONLY_TOKEN --force --no-start 2>&1); then
             output=${output//'%'/'%25'}
