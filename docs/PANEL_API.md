@@ -1,121 +1,176 @@
-# Panel API contract
+# Panel API contract — v1.0
 
-The agent authenticates with `Authorization: Bearer <node token>`.
+Every agent request uses:
 
-## Desired state
+```http
+Authorization: Bearer <unique node token>
+```
+
+The panel is the source of truth for desired configuration and cumulative committed traffic.
+
+## GET desired state
 
 `GET /api/v1/nodes/{node_id}/desired-state`
 
-The response is declarative. The panel is the source of truth.
+Top-level example:
 
 ```json
 {
-  "version": "42",
-  "enabled": true,
-  "mode": "active",
-  "inbounds": [],
-  "outbounds": [],
-  "routing": {},
-  "dns": {}
-}
-```
-
-Supported node modes in v0.1:
-
-- `active`: apply config and run Xray.
-- `maintenance`: stop Xray.
-- `disabled`: stop Xray.
-
-`draining` should be implemented at the control plane first: stop assigning new users/connections to the node, then transition to maintenance after the active-session target is reached.
-
-## Inbound model
-
-```json
-{
-  "id": "101",
-  "tag": "vless-reality-443",
-  "listen": "0.0.0.0",
-  "port": 443,
-  "protocol": "vless",
-  "settings": {"decryption": "none"},
-  "stream_settings": {},
-  "sniffing": {},
-  "users": []
-}
-```
-
-The agent passes protocol-specific `settings` and `stream_settings` to Xray. This avoids coupling the agent release cycle to every Xray transport field.
-
-## User model
-
-```json
-{
-  "id": "25",
-  "enabled": true,
-  "credential": {
-    "id": "550e8400-e29b-41d4-a716-446655440000",
-    "flow": "xtls-rprx-vision"
+  "version":"100",
+  "enabled":true,
+  "mode":"active",
+  "node":{
+    "region":"DE",
+    "group":"premium",
+    "tags":["reality","10g"],
+    "weight":100,
+    "traffic_threshold_bytes":21990232555520,
+    "traffic_used_bytes":12000000000000,
+    "drain_target_online":0
   },
-  "limits": {
-    "traffic_bytes": 536870912000,
-    "upload_bps": 20000000,
-    "download_bps": 100000000,
-    "ip_limit": 2,
-    "device_limit": 3,
-    "connection_limit": 20,
-    "expires_at": 0
+  "inbounds":[],
+  "outbounds":[],
+  "routing":{},
+  "dns":{}
+}
+```
+
+Modes:
+
+- `active`: normal convergence.
+- `draining`: retain existing inbound/user membership but refuse newly introduced membership; report `drain_ready` when online users are at/below `drain_target_online`.
+- `maintenance`: collect/report state and stop Xray.
+- `disabled`: stop Xray and remain disabled.
+
+If node `traffic_used_bytes >= traffic_threshold_bytes`, the agent locally enters draining even if the requested mode was active.
+
+### Inbound
+
+```json
+{
+  "id":"101",
+  "tag":"vless-reality-443",
+  "listen":"0.0.0.0",
+  "port":443,
+  "protocol":"vless",
+  "ip_limit_mode":"source",
+  "settings":{"decryption":"none"},
+  "stream_settings":{},
+  "sniffing":{},
+  "users":[]
+}
+```
+
+Protocol-specific Xray JSON is passed through. Managed user injection is automatic for VLESS, VMess, Trojan and Shadowsocks; `wireguard` users are mapped to peers. Other Xray protocols can be created from the panel by providing their native settings.
+
+### User / device credential
+
+```json
+{
+  "id":"device-25-a",
+  "account_id":"25",
+  "enabled":true,
+  "session_generation":3,
+  "outbound_tag":"direct",
+  "level":0,
+  "credential":{"id":"550e8400-e29b-41d4-a716-446655440000","flow":"xtls-rprx-vision"},
+  "limits":{
+    "traffic_bytes":536870912000,
+    "traffic_used_bytes":1234567890,
+    "upload_bps":2500000,
+    "download_bps":12500000,
+    "ip_limit":2,
+    "device_limit":3,
+    "connection_limit":20,
+    "expires_at":0
   }
 }
 ```
 
-For VLESS/VMess/Trojan/Shadowsocks, the agent inserts users into `settings.clients` and generates a deterministic accounting email:
+`outbound_tag` creates an automatic routing rule for this synthetic user identity. Increment `session_generation` to disconnect existing sessions without disabling the credential.
 
-`u:<user_id>|i:<inbound_id>`
-
-For WireGuard, each enabled user credential is treated as a peer object and inserted into `settings.peers`.
-
-## Heartbeat
+## POST heartbeat
 
 `POST /api/v1/nodes/{node_id}/heartbeat`
 
+Important v1 fields:
+
 ```json
 {
-  "node_id": "node-12",
-  "agent_version": "0.1.0",
-  "xray_version": "Xray ...",
-  "healthy": true,
-  "xray_running": true,
-  "memory_bytes": 123456789,
-  "load1": 0.21,
-  "state_version": "42",
-  "message": "ok"
+  "node_id":"node-12",
+  "agent_version":"1.0.0",
+  "healthy":true,
+  "xray_running":true,
+  "xray_api_healthy":true,
+  "cpu_percent":13.2,
+  "memory_bytes":734003200,
+  "load1":0.21,
+  "network_rx_bytes":123,
+  "network_tx_bytes":456,
+  "network_rx_bps":800000000,
+  "network_tx_bps":120000000,
+  "online_users":14,
+  "tracked_ips":19,
+  "mode":"draining",
+  "drain_ready":false,
+  "region":"DE",
+  "group":"premium",
+  "tags":["reality","10g"],
+  "weight":100,
+  "strict_limits_ready":true,
+  "state_version":"100",
+  "message":"ok"
 }
 ```
 
-## Traffic report
+`network_*_bps` in heartbeat is **bits/sec**. `strict_limits_ready` confirms the maintained patched core marker is present whenever current policies require strict data-path enforcement.
+
+Your global scheduler can use `healthy`, `mode`, `drain_ready`, `weight`, region/group/tags and its own capacity policy for cross-node failover/load balancing.
+
+## POST traffic
 
 `POST /api/v1/nodes/{node_id}/traffic`
 
 ```json
 {
-  "node_id": "node-12",
-  "records": [
-    {
-      "name": "user>>>u:25|i:101>>>traffic>>>downlink",
-      "value": 2040,
-      "user_id": "25",
-      "inbound_id": "101",
-      "direction": "downlink"
-    }
+  "event_id":"d0a48cda15c14a68a6251d85a0c7af91",
+  "node_id":"node-12",
+  "collected_at":1786680000,
+  "records":[
+    {"name":"user>>>u:device-25-a|i:101>>>traffic>>>downlink","value":2040,"user_id":"device-25-a","inbound_id":"101","direction":"downlink"}
   ]
 }
 ```
 
-The agent reads counters with reset enabled. The panel should treat reports as deltas and persist/aggregate them transactionally.
+The panel **must transactionally deduplicate `event_id`** and then add each value as a delta. The same event can be retried after an ambiguous network failure.
 
-## Idempotency
+## POST sessions
 
-- Desired state is versioned.
-- Repeating the same desired state must be safe.
-- Heartbeats and traffic posts should accept retries.
-- Traffic ingestion should use a request/event id in a later protocol revision to prevent duplicate billing after network retries.
+When `report_sessions:true`:
+
+`POST /api/v1/nodes/{node_id}/sessions`
+
+```json
+{
+  "node_id":"node-12",
+  "generated_at":1786680000,
+  "window_sec":120,
+  "records":[
+    {"user_id":"device-25-a","inbound_id":"101","ips":["203.0.113.10"],"last_seen":1786679996,"recent_connections":6,"source":"xray-online"}
+  ],
+  "violations":[
+    {"user_id":"device-25-a","inbound_id":"101","reason":"ip_limit","observed":3,"limit":2}
+  ]
+}
+```
+
+Policy reasons are `expired`, `traffic_quota`, `ip_limit`, and `device_limit`.
+
+The native `xray-online` IP list represents currently referenced IPs. `recent_connections` is supplemental access-log activity and is not the exact active dispatcher connection count; exact connection enforcement remains inside the patched core.
+
+## Ordering / retries
+
+- Desired state must be safe to read repeatedly.
+- Use a monotonically changing `version` for observability.
+- Heartbeats/session reports should tolerate retries.
+- Traffic processing is keyed by `event_id`, not arrival time.

@@ -22,7 +22,7 @@ func TestPlanRuntimeAddUser(t *testing.T) {
 	if plan.RequiresRestart || len(plan.Operations) != 1 || plan.Operations[0].Kind != RuntimeAddUser {
 		t.Fatalf("unexpected plan: %#v", plan)
 	}
-	if got := accountingEmail(plan.Operations[0].User.ID, plan.Operations[0].Inbound.ID); got != "u:u2|i:in-1" {
+	if got := AccountingEmail(plan.Operations[0].User.ID, plan.Operations[0].Inbound.ID); got != "u:u2|i:in-1" {
 		t.Fatalf("unexpected accounting email %q", got)
 	}
 }

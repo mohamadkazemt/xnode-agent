@@ -6,6 +6,18 @@
   "xray_binary": "/usr/local/bin/xray",
   "xray_config": "/etc/xnode/xray.json",
   "xray_api": "127.0.0.1:10085",
+  "xray_access_log": "/var/log/xnode/xray-access.log",
+  "xray_limits_file": "/var/lib/xnode/limits.json",
   "state_file": "/var/lib/xnode/state.json",
-  "listen": "127.0.0.1:19090"
+  "traffic_spool_dir": "/var/lib/xnode/traffic-spool",
+  "ip_window_seconds": 120,
+  "report_sessions": true,
+  "require_patched_core": true,
+  "strict_limit_backend_url": "",
+  "listen": "127.0.0.1:19090",
+  "network_interface": "eth0",
+  "region": "DE",
+  "group": "premium",
+  "tags": ["reality", "10g"],
+  "weight": 100
 }

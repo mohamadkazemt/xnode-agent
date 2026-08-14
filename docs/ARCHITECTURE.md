@@ -1,117 +1,79 @@
-# Architecture
+# Architecture — v1.0
 
 ```text
-Your Panel / Control Plane
-        |
-        | HTTPS + per-node token
-        v
-   xnode-agent
-   |   |   |\
-   |   |   | +-- limiter backend
-   |   |   +---- health / recovery
-   |   +-------- stats / accounting
-   +------------ desired/current reconciler
-        |
-        | localhost Xray API + config/process
-        v
-    official Xray binary
+                         YOUR PANEL / CONTROL PLANE
+                         users, nodes, assignment,
+                         groups, global failover/LB
+                                   |
+                             HTTPS + token
+                                   v
++------------------------------------------------------------------+
+|                         xnode-agent                               |
+|                                                                  |
+| desired-state reconciler  policy evaluator  traffic spool        |
+| runtime HandlerService    session/online     health/recovery      |
+| node drain/threshold      core policy file   local health API     |
++-------------------------------+----------------------------------+
+                                |
+                 localhost API  |  atomic config/policy
+                                v
++------------------------------------------------------------------+
+| Xray v26.7.28 + narrow xnode dispatcher overlay                  |
+| protocols/transports | stats/online map | routing | strict limits|
++------------------------------------------------------------------+
+                                |
+                             Internet
 ```
 
-## Design principles
+## Separation of responsibilities
 
-1. Keep the official Xray binary replaceable and easy to update.
-2. Keep business rules in the panel, not in Xray config templates.
-3. Make the node agent declarative: panel sends desired state; agent converges to it.
-4. Keep Xray's gRPC API on loopback only.
-5. Separate policy description from policy enforcement.
-6. Prefer hot reload, but never leave runtime state ahead of an invalid/unpersisted config.
+The panel owns global truth: users, plans, credentials, cumulative billing, node assignment, groups, and cross-node scheduling. The agent owns convergence of one server. Xray owns the packet/data path.
 
-## v0.2 convergence path
+This keeps the agent horizontally replaceable and avoids giving one node a global database role.
+
+## Convergence loop
 
 ```text
-GET desired state
-        |
-        v
-load last applied state
-        |
-        v
-build complete Xray JSON
-        |
-        v
-xray run -test -c candidate
-        |
-        +---------------------------+
-        |                           |
-        | hot-safe diff             | restart-required diff
-        v                           v
-HandlerService operations       atomic config write
-adi/rmi/adu/rmu                    + restart
-        |
-        v
-persist validated full config
-        |
-        v
-query/reset stats
-        |
-        v
-POST traffic + heartbeat
+retry durable traffic events
+       -> query/reset Xray traffic counters
+       -> durably spool + submit new traffic event
+       -> query native online IPs (access-log fallback)
+       -> GET desired state
+       -> node threshold/drain policy
+       -> quota/expiration/IP/device evaluation
+       -> atomically write strict core policy
+       -> build complete Xray config
+       -> xray run -test candidate
+       -> hot HandlerService diff OR validated restart
+       -> Xray API health check / recovery / rollback
+       -> POST sessions + heartbeat
+       -> persist effective applied state
 ```
 
-If any hot operation fails, the agent writes the already validated desired config and performs a full restart. This prevents partial runtime convergence from becoming permanent.
+The persisted state is the effective state actually applied, including temporary policy blocks. When the panel state makes a user eligible again, the next reconciliation re-adds it.
 
-## Runtime diff rules
+## Runtime mutations
 
-Hot reload is used for:
+Hot operations are used for safe inbound and VLESS/VMess/Trojan/Shadowsocks user changes. WireGuard peer changes replace that inbound. Global outbound/routing/DNS changes and new Xray policy levels use a validated restart.
 
-- add inbound
-- remove inbound
-- structural inbound replacement (remove + add)
-- add/remove/update users on VLESS, VMess, Trojan and Shadowsocks
+Any hot-operation failure falls back to the complete validated desired config. Process startup failure attempts the saved last-good config.
 
-A validated restart is used for:
+## Strict policy data path
 
-- outbound changes
-- routing changes
-- DNS changes
-- introducing a new Xray user policy `level`
-- any runtime API failure
+The agent writes an atomic JSON map keyed by the same synthetic Xray email used for stats. The patched dispatcher:
 
-WireGuard peer changes currently replace the inbound because WireGuard does not use the same Xray `UserManager` model as VLESS/VMess/Trojan.
+1. sees the authenticated `MemoryUser`;
+2. counts every logical dispatcher connection;
+3. checks block/connection admission;
+4. wraps authenticated up/down data paths;
+5. reloads policy without restart;
+6. applies one shared rate bucket per user/direction;
+7. terminates sessions when blocked, over limit, deleted (tombstone), or when `session_generation` changes.
 
-## HandlerService adapter
+This is intentionally a narrow overlay rather than a fork of unrelated Xray subsystems.
 
-The agent intentionally does not import Xray-core protobuf packages. Instead it invokes Xray's official CLI commands, which build the typed configuration and call HandlerService internally:
+## Node failover and load balancing
 
-```text
-adi -> HandlerService.AddInbound
-rmi -> HandlerService.RemoveInbound
-adu -> HandlerService.AlterInbound(AddUserOperation)
-rmu -> HandlerService.AlterInbound(RemoveUserOperation)
-```
+A single node cannot safely decide global failover because it has no authoritative view of the other nodes or client endpoint distribution. The heartbeat therefore reports the fields the panel scheduler needs: health, region, group, tags, weight, mode, drain state, network rate and traffic threshold state.
 
-This keeps the agent's Go module small and reduces coupling to Xray internal protobuf changes.
-
-## Accounting
-
-Client-based protocols use a synthetic Xray `email` containing both panel user id and inbound id. This creates native Xray user counters that can be mapped back to `(user, inbound)`.
-
-WireGuard is different: peers do not use the same Xray `email` user-account model. Per-peer billing therefore needs a dedicated provider or a core/kernel implementation; v0.2 only guarantees aggregate inbound counters for WireGuard.
-
-## Limits
-
-The desired-state model already contains:
-
-- quota
-- upload/download rate
-- IP limit
-- device limit
-- connection limit
-- expiration
-
-v0.2 does not claim strict enforcement of rate/IP/device/connection limits. The `limits.Backend` interface is the extension point.
-
-Preferred long-term enforcement order:
-
-1. authenticated-user layer in a small maintained Xray patch for exact per-user semantics;
-2. kernel/eBPF/tc/nftables backend where identity can be preserved reliably;
-3. panel-side policy for quota/expiration/device credential issuance.
+Within one Xray process, native routing/balancer JSON remains available through desired-state passthrough.

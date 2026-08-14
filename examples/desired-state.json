@@ -1,7 +1,16 @@
 {
-  "version": "42",
+  "version": "100",
   "enabled": true,
   "mode": "active",
+  "node": {
+    "region": "DE",
+    "group": "premium",
+    "tags": ["reality", "wireguard"],
+    "weight": 100,
+    "traffic_threshold_bytes": 21990232555520,
+    "traffic_used_bytes": 0,
+    "drain_target_online": 0
+  },
   "inbounds": [
     {
       "id": "101",
@@ -9,6 +18,7 @@
       "listen": "0.0.0.0",
       "port": 443,
       "protocol": "vless",
+      "ip_limit_mode": "source",
       "settings": {"decryption": "none"},
       "stream_settings": {
         "method": "raw",
@@ -23,10 +33,25 @@
       },
       "users": [
         {
-          "id": "25",
+          "id": "device-25-a",
+          "account_id": "25",
           "enabled": true,
-          "credential": {"id": "550e8400-e29b-41d4-a716-446655440000", "flow": "xtls-rprx-vision"},
-          "limits": {"traffic_bytes": 536870912000, "download_bps": 100000000, "ip_limit": 2, "connection_limit": 20}
+          "session_generation": 1,
+          "outbound_tag": "direct",
+          "credential": {
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "flow": "xtls-rprx-vision"
+          },
+          "limits": {
+            "traffic_bytes": 536870912000,
+            "traffic_used_bytes": 0,
+            "upload_bps": 2500000,
+            "download_bps": 12500000,
+            "ip_limit": 2,
+            "device_limit": 3,
+            "connection_limit": 20,
+            "expires_at": 0
+          }
         }
       ]
     },
@@ -38,8 +63,21 @@
       "protocol": "wireguard",
       "settings": {"secretKey": "REPLACE_PRIVATE_KEY", "mtu": 1420},
       "users": [
-        {"id":"wg-user-1","enabled":true,"credential":{"publicKey":"REPLACE_PUBLIC_KEY","allowedIPs":["10.0.0.2/32"]}}
+        {
+          "id": "wg-device-1",
+          "account_id": "25",
+          "enabled": true,
+          "credential": {
+            "publicKey": "REPLACE_PUBLIC_KEY",
+            "allowedIPs": ["10.0.0.2/32"]
+          },
+          "limits": {"traffic_used_bytes": 0}
+        }
       ]
     }
+  ],
+  "outbounds": [
+    {"tag": "direct", "protocol": "freedom"},
+    {"tag": "block", "protocol": "blackhole"}
   ]
 }

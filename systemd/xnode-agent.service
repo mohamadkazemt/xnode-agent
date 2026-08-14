@@ -1,5 +1,5 @@
 [Unit]
-Description=XNode Agent
+Description=XNode Agent and managed Xray core
 After=network-online.target
 Wants=network-online.target
 
@@ -9,7 +9,18 @@ ExecStart=/usr/local/bin/xnode-agent -config /etc/xnode/agent.json
 Restart=always
 RestartSec=2
 NoNewPrivileges=true
+UMask=0077
 LimitNOFILE=1048576
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+ReadWritePaths=/etc/xnode /var/lib/xnode /var/log/xnode
 
 [Install]
 WantedBy=multi-user.target

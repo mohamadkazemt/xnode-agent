@@ -1,130 +1,103 @@
-# xnode-agent v0.2
+# xnode-agent v1.0.0
 
-A lightweight control-plane bridge between your panel and the official Xray binary.
+`xnode-agent` is a node-side control bridge for a panel you already own. The panel remains the control plane; each server runs `xnode-agent` plus a pinned Xray core. The agent receives desired state, validates and reconciles Xray, reports traffic/health/sessions, and enforces node/user policy.
 
-`xnode-agent` keeps business logic in your panel, compiles declarative node state into Xray config, hot-reloads supported changes through Xray HandlerService, and falls back to a validated restart when a runtime mutation is not safe.
+## What v1.0 implements
 
-## Implemented
+### Xray / inbound control
 
-### Core / inbound management
+- Multiple independent inbounds on one server.
+- Create/update/remove inbounds from panel desired state; no SSH editing is required.
+- Generic Xray `settings`, `streamSettings`, `sniffing`, `routing`, `dns`, and outbound passthrough, so current Xray protocols/transports are not hard-coded into the agent.
+- Managed runtime users for VLESS, VMess, Trojan and Shadowsocks.
+- Managed WireGuard peers; peer-list changes replace that inbound safely.
+- Runtime add/remove/replace through Xray HandlerService CLI where safe; full validated restart otherwise.
+- Atomic config updates, last-good rollback, process restart, API health-check and recovery.
 
-- Multiple Xray inbounds on one server.
-- Create/remove/replace inbounds from panel desired state.
-- Runtime `AddInbound` / `RemoveInbound` using Xray's official `api adi/rmi` commands.
-- Runtime add/remove users using Xray's official `api adu/rmu` commands for supported client-based protocols.
-- VLESS, VMess, Trojan and Shadowsocks managed clients.
-- WireGuard peers generated from panel-managed users.
-- Generic raw `settings`, `streamSettings`, sniffing, routing, DNS and outbound passthrough.
+### Accounting / users
 
-### Safe convergence
+- Deterministic per-user + per-inbound identity: `u:<user_id>|i:<inbound_id>`.
+- Per-inbound traffic deltas and durable idempotent delivery to the panel.
+- Traffic quota and expiration cutoff.
+- Exact online IP list when supported by the pinned Xray core, with access-log fallback.
+- IP limit, device credential limit, suspend/resume and session reporting.
+- `session_generation`: increment it in the panel to disconnect the user's existing dispatcher sessions while allowing new sessions immediately.
+- Per-user routing through `outbound_tag`.
+- Per-user protocol selection by placing that credential only in the allowed inbounds.
 
-- Desired/current diff engine.
-- Full config validation with `xray run -test` before any live mutation.
-- Hot reload for compatible inbound/user changes.
-- Atomic config persistence after successful hot reload.
-- Automatic full restart fallback if a HandlerService operation fails.
-- Structural inbound changes use remove + short delay + add to avoid rapid re-add races.
-- Outbound/routing/DNS changes intentionally use a validated restart in v0.2.
+### Strict data-path limits
 
-### Accounting
+The repository includes a narrow maintained overlay for **Xray v26.7.28**. It adds:
 
-- Per-user/per-inbound traffic identity using `u:<user>|i:<inbound>` as Xray email.
-- Xray statistics query with reset and panel traffic reporting.
-- Runtime user changes preserve the same accounting identity.
-- A new Xray policy `level` triggers a controlled restart so user traffic stats stay enabled for that level.
+- aggregate upload rate per authenticated user;
+- aggregate download rate per authenticated user;
+- exact concurrent dispatcher connection admission;
+- live policy reload without Xray restart;
+- active-session cutoff for suspend/quota/expiration/IP/device policy;
+- session-generation disconnect;
+- removed-user tombstones so an already-established session cannot survive credential deletion indefinitely.
+
+The agent writes `/var/lib/xnode/limits.json` atomically. The patched dispatcher reads that policy using the same synthetic authenticated email used for accounting. Set `require_patched_core: true` in production when you depend on strict limits.
+
+`upload_bps` and `download_bps` are **bytes per second**. Example: `12500000` is approximately 100 Mbit/s.
 
 ### Node operations
 
-- Xray process start/stop/restart.
-- Heartbeat with Xray version/running state.
-- Basic memory/load health.
-- Node modes: active / disabled / maintenance.
-- Limit policy model and pluggable limiter backend interface.
+- modes: `active`, `draining`, `maintenance`, `disabled`;
+- drain prevents new inbound/user membership and exposes `drain_ready` when online users reach the configured target;
+- traffic threshold can automatically move a node into drain mode;
+- region, group, tags and weight telemetry;
+- CPU, used RAM, load, network totals and current RX/TX bit-rate;
+- auto health-check, process restart, API recovery and last-good rollback;
+- local `/healthz`, `/readyz`, `/status` endpoints on loopback.
 
-## Xray compatibility
+Cross-server failover/load balancing is intentionally a **panel/control-plane decision**: the agent reports health, mode, weight, group, region and traffic metadata needed for that decision. Xray's own per-node routing/balancer config can still be passed through in desired state.
 
-v0.2 uses the official Xray CLI as a thin HandlerService client:
+## Quick start
 
-```text
-xray api adi   # AddInbound
-xray api rmi   # RemoveInbound
-xray api adu   # AlterInbound(AddUserOperation)
-xray api rmu   # AlterInbound(RemoveUserOperation)
-```
-
-These commands are present in Xray-core stable `v26.3.27`. If an older/custom Xray binary does not support a runtime command, the agent falls back to a validated full restart instead of leaving the node partially applied.
-
-## Panel API contract
-
-### GET `/api/v1/nodes/{node_id}/desired-state`
-
-Returns the shape shown in `examples/desired-state.json`.
-
-### POST `/api/v1/nodes/{node_id}/heartbeat`
-
-Agent sends health, Xray version/running state and desired-state version.
-
-### POST `/api/v1/nodes/{node_id}/traffic`
-
-Agent sends Xray stats records. Managed user records also include parsed `user_id`, `inbound_id`, and `direction`.
-
-WireGuard inbound totals are available, but Xray does not expose the same email-based per-peer counters as client-based protocols, so strict per-peer WireGuard accounting needs a separate provider/patch.
-
-## Accounting strategy
-
-For client-based protocols the agent generates a unique Xray email per user/inbound:
-
-```text
-u:25|i:101
-```
-
-Xray exposes counters such as:
-
-```text
-user>>>u:25|i:101>>>traffic>>>uplink
-user>>>u:25|i:101>>>traffic>>>downlink
-```
-
-This gives per-user traffic split by inbound without modifying Xray-core.
-
-## Limits
-
-Speed limit, IP limit, device limit and connection limit are represented in the API model, but currently use an observe-only limiter backend. Strict enforcement should be implemented as either:
-
-1. a Linux/eBPF/tc/nftables backend where identity can be preserved reliably, or
-2. a small maintained Xray-core patch at the authenticated-user dispatch layer.
-
-Do not advertise these limits as enforced until such a backend is installed.
-
-## Build
+Requirements for building the bundled strict core are `git`, `python3`, Go **1.26+** for Xray, and systemd on the target Linux server. The agent itself targets Go 1.23+.
 
 ```bash
-go test ./...
-go vet ./...
-go build -o bin/xnode-agent ./cmd/xnode-agent
+cp examples/agent.json /tmp/agent.json
+# edit node_id, panel_url, panel_token and interface
+sudo ./scripts/install.sh /tmp/agent.json
 ```
 
-## Run
+The installer builds/tests the agent, builds the pinned Xray core with the maintained dispatcher overlay, installs both binaries, installs systemd/logrotate config and starts the service.
 
-Install the official Xray binary, copy `examples/agent.json` to `/etc/xnode/agent.json`, then:
+Useful checks:
 
 ```bash
-./bin/xnode-agent -config /etc/xnode/agent.json
+systemctl status xnode-agent
+curl http://127.0.0.1:19090/healthz
+curl http://127.0.0.1:19090/readyz
+curl http://127.0.0.1:19090/status
 ```
 
-## Security notes
+## Panel contract
 
-- Keep Xray API on loopback only (`127.0.0.1`).
-- Use HTTPS and a unique node token for panel communication.
-- Store config files with restrictive permissions because REALITY/WireGuard private keys may be present.
-- Prefer token rotation and per-node credentials in the panel.
+The panel implements:
 
-## Next milestones
+```text
+GET  /api/v1/nodes/{node_id}/desired-state
+POST /api/v1/nodes/{node_id}/heartbeat
+POST /api/v1/nodes/{node_id}/traffic
+POST /api/v1/nodes/{node_id}/sessions
+```
 
-- Strict limiter backend: speed/IP/connection enforcement.
-- Active connection/session registry.
-- Drain mode semantics.
-- Config rollback history.
-- Local diagnostics endpoint.
-- CPU/network sampling and Prometheus metrics.
-- Node groups/weights/failover orchestration in the control plane.
+Traffic posts carry an `event_id`; the panel must deduplicate it transactionally before adding deltas.
+
+See `docs/PANEL_API.md`, `docs/LIMITS.md`, `docs/ARCHITECTURE.md`, `docs/TRAFFIC_DELIVERY.md`, `docs/RUNTIME_API.md`, and `docs/DEPLOYMENT.md`.
+
+## Security boundary
+
+- Xray API and the agent admin HTTP listener are rejected unless configured on loopback.
+- Panel URL must be HTTPS except for loopback development.
+- State, policy, traffic spool, configs and logs are created with restrictive permissions.
+- A unique node token should be issued per server and rotated by the panel.
+- Source-IP policy is meaningful only when Xray sees the real client source. Disable `ip_limit_mode` for an inbound if a CDN/proxy hides it.
+- The strict Xray overlay is pinned; do not change the upstream tag unless the `xray-patch` CI job passes against the new source.
+
+## Scope boundary
+
+This repository is the **node layer**, not a replacement for your panel. Node assignment, DNS changes for failover, global load balancing, plan/business logic and user credential issuance remain in your control plane. The agent exposes all node state required to implement those decisions safely.

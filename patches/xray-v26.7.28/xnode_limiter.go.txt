@@ -1,0 +1,279 @@
+package dispatcher
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/xtls/xray-core/common"
+	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/common/session"
+	"github.com/xtls/xray-core/transport"
+)
+
+type xnodePolicy struct {
+	UploadBPS       int64 `json:"upload_bps"`
+	DownloadBPS     int64 `json:"download_bps"`
+	ConnectionLimit int   `json:"connection_limit"`
+	Blocked         bool  `json:"blocked"`
+	TombstoneUntil   int64 `json:"tombstone_until"`
+	SessionGeneration int64 `json:"session_generation"`
+}
+
+type xnodePolicyFile struct {
+	Version int                    `json:"version"`
+	Users   map[string]xnodePolicy `json:"users"`
+}
+
+type xnodeBucket struct {
+	mu   sync.Mutex
+	next time.Time
+}
+
+var xnodeLimiter = struct {
+	sync.Mutex
+	path        string
+	checkedAt   time.Time
+	mtime       time.Time
+	policies    map[string]xnodePolicy
+	connections map[string]int
+	buckets     map[string]*xnodeBucket
+}{
+	policies:    map[string]xnodePolicy{},
+	connections: map[string]int{},
+	buckets:     map[string]*xnodeBucket{},
+}
+
+func init() {
+	if path := os.Getenv("XNODE_LIMITS_FILE"); path != "" {
+		_ = os.WriteFile(path+".core-ready", []byte("xnode-limiter-v1\n"), 0o600)
+	}
+}
+
+func xnodeRefreshPolicies() {
+	now := time.Now()
+	xnodeLimiter.Lock()
+	defer xnodeLimiter.Unlock()
+	if now.Sub(xnodeLimiter.checkedAt) < time.Second {
+		return
+	}
+	xnodeLimiter.checkedAt = now
+	path := os.Getenv("XNODE_LIMITS_FILE")
+	if path == "" {
+		xnodeLimiter.policies = map[string]xnodePolicy{}
+		xnodeLimiter.path = ""
+		xnodeLimiter.mtime = time.Time{}
+		return
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		xnodeLimiter.policies = map[string]xnodePolicy{}
+		return
+	}
+	if path == xnodeLimiter.path && st.ModTime().Equal(xnodeLimiter.mtime) {
+		return
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var doc xnodePolicyFile
+	if json.Unmarshal(b, &doc) != nil || doc.Version != 1 || doc.Users == nil {
+		return
+	}
+	xnodeLimiter.path = path
+	xnodeLimiter.mtime = st.ModTime()
+	xnodeLimiter.policies = doc.Users
+}
+
+func xnodePolicyFor(email string) xnodePolicy {
+	xnodeRefreshPolicies()
+	xnodeLimiter.Lock()
+	p := xnodeLimiter.policies[email]
+	xnodeLimiter.Unlock()
+	if p.TombstoneUntil > 0 && time.Now().Unix() >= p.TombstoneUntil {
+		return xnodePolicy{}
+	}
+	return p
+}
+
+func xnodeEmail(ctx context.Context) string {
+	in := session.InboundFromContext(ctx)
+	if in == nil || in.User == nil {
+		return ""
+	}
+	return in.User.Email
+}
+
+// xnodeAdmit is called at Dispatcher entry, after protocol authentication has
+// attached the MemoryUser to the session context. It therefore limits logical
+// dispatched connections rather than kernel sockets or source-IP guesses.
+func xnodeAdmit(ctx context.Context) error {
+	email := xnodeEmail(ctx)
+	if email == "" {
+		return nil
+	}
+	p := xnodePolicyFor(email)
+	if p.Blocked {
+		return fmt.Errorf("xnode: user blocked: %s", email)
+	}
+	xnodeLimiter.Lock()
+	active := xnodeLimiter.connections[email]
+	if p.ConnectionLimit > 0 && active >= p.ConnectionLimit {
+		xnodeLimiter.Unlock()
+		return fmt.Errorf("xnode: connection limit exceeded for %s", email)
+	}
+	// Count every authenticated dispatcher connection, even while the user is
+	// currently unlimited. This makes a connection limit applied later exact
+	// for already-active sessions and lets policy changes tear excess sessions.
+	xnodeLimiter.connections[email] = active + 1
+	xnodeLimiter.Unlock()
+
+	var once sync.Once
+	context.AfterFunc(ctx, func() {
+		once.Do(func() {
+			xnodeLimiter.Lock()
+			if n := xnodeLimiter.connections[email]; n <= 1 {
+				delete(xnodeLimiter.connections, email)
+			} else {
+				xnodeLimiter.connections[email] = n - 1
+			}
+			xnodeLimiter.Unlock()
+		})
+	})
+	return nil
+}
+
+func xnodeBucketFor(key string) *xnodeBucket {
+	xnodeLimiter.Lock()
+	defer xnodeLimiter.Unlock()
+	b := xnodeLimiter.buckets[key]
+	if b == nil {
+		b = &xnodeBucket{}
+		xnodeLimiter.buckets[key] = b
+	}
+	return b
+}
+
+// xnodeWait implements an aggregate, per-user leaky bucket. All concurrent
+// connections for the same email+direction reserve time from one shared
+// bucket, so the configured rate is not multiplied by connection count.
+func xnodeWait(ctx context.Context, email string, generation int64, downlink bool, n int64) error {
+	if n <= 0 || email == "" {
+		return nil
+	}
+	p := xnodePolicyFor(email)
+	if p.Blocked {
+		return fmt.Errorf("xnode: user blocked: %s", email)
+	}
+	if p.SessionGeneration != generation {
+		return fmt.Errorf("xnode: session generation changed for %s", email)
+	}
+	if p.ConnectionLimit > 0 {
+		xnodeLimiter.Lock()
+		over := xnodeLimiter.connections[email] > p.ConnectionLimit
+		xnodeLimiter.Unlock()
+		if over {
+			return fmt.Errorf("xnode: active connection count exceeds limit for %s", email)
+		}
+	}
+	rate := p.UploadBPS
+	direction := "up"
+	if downlink {
+		rate = p.DownloadBPS
+		direction = "down"
+	}
+	if rate <= 0 {
+		return nil
+	}
+	b := xnodeBucketFor(email + ":" + direction)
+	b.mu.Lock()
+	now := time.Now()
+	if b.next.Before(now) {
+		b.next = now
+	}
+	// Avoid integer overflow while preserving sub-second precision.
+	duration := time.Duration(float64(n) / float64(rate) * float64(time.Second))
+	if duration < 0 {
+		duration = 0
+	}
+	b.next = b.next.Add(duration)
+	deadline := b.next
+	b.mu.Unlock()
+
+	wait := time.Until(deadline)
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+type xnodeRateWriter struct {
+	ctx        context.Context
+	email      string
+	generation int64
+	downlink   bool
+	writer     buf.Writer
+}
+
+func (w *xnodeRateWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+	if err := xnodeWait(w.ctx, w.email, w.generation, w.downlink, int64(mb.Len())); err != nil {
+		buf.ReleaseMulti(mb)
+		return err
+	}
+	return w.writer.WriteMultiBuffer(mb)
+}
+func (w *xnodeRateWriter) Close() error { return common.Close(w.writer) }
+func (w *xnodeRateWriter) Interrupt()   { common.Interrupt(w.writer) }
+
+type xnodeRateReader struct {
+	ctx        context.Context
+	email      string
+	generation int64
+	reader     buf.Reader
+}
+
+func (r *xnodeRateReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	mb, err := r.reader.ReadMultiBuffer()
+	if mb != nil && !mb.IsEmpty() {
+		if werr := xnodeWait(r.ctx, r.email, r.generation, false, int64(mb.Len())); werr != nil {
+			buf.ReleaseMulti(mb)
+			return nil, werr
+		}
+	}
+	return mb, err
+}
+
+func xnodeWrapGeneratedLinks(ctx context.Context, inbound, outbound *transport.Link) {
+	email := xnodeEmail(ctx)
+	if email == "" {
+		return
+	}
+	// Always install the lightweight wrappers for authenticated users. Policies
+	// can change while a connection is alive; an initially-unlimited session
+	// must still observe a later suspend/quota/IP/speed/connection decision.
+	p := xnodePolicyFor(email)
+	inbound.Writer = &xnodeRateWriter{ctx: ctx, email: email, generation: p.SessionGeneration, writer: inbound.Writer}
+	outbound.Writer = &xnodeRateWriter{ctx: ctx, email: email, generation: p.SessionGeneration, downlink: true, writer: outbound.Writer}
+}
+
+func xnodeWrapProvidedLink(ctx context.Context, link *transport.Link) *transport.Link {
+	email := xnodeEmail(ctx)
+	if email == "" || link == nil {
+		return link
+	}
+	p := xnodePolicyFor(email)
+	link.Reader = &xnodeRateReader{ctx: ctx, email: email, generation: p.SessionGeneration, reader: link.Reader}
+	link.Writer = &xnodeRateWriter{ctx: ctx, email: email, generation: p.SessionGeneration, downlink: true, writer: link.Writer}
+	return link
+}

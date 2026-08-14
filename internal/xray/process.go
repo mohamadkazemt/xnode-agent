@@ -16,15 +16,19 @@ import (
 )
 
 type Manager struct {
-	Binary string
-	Config string
-	API    string
-	mu     sync.Mutex
-	cmd    *exec.Cmd
+	Binary     string
+	Config     string
+	API        string
+	LimitsFile string
+	mu         sync.Mutex
+	cmd        *exec.Cmd
 }
+
+func (m *Manager) backupPath() string { return m.Config + ".last-good" }
 
 func (m *Manager) Validate(ctx context.Context, candidate string) error {
 	cmd := exec.CommandContext(ctx, m.Binary, "run", "-test", "-c", candidate)
+	cmd.Env = m.commandEnv()
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -34,17 +38,12 @@ func (m *Manager) Validate(ctx context.Context, candidate string) error {
 	return nil
 }
 
-// ValidateContent validates a complete desired Xray config without replacing
-// the active config file or restarting the process.
 func (m *Manager) ValidateContent(ctx context.Context, content []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.validateContentLocked(ctx, content)
 }
 
-// Store validates and atomically persists a config without restarting Xray.
-// It is used after a successful HandlerService hot reload so a later restart
-// comes back with exactly the same desired state.
 func (m *Manager) Store(ctx context.Context, content []byte) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -57,6 +56,8 @@ func (m *Manager) Store(ctx context.Context, content []byte) (bool, error) {
 	if err := m.writeConfigLocked(content); err != nil {
 		return false, err
 	}
+	// A successful runtime reconcile means this persisted config is known-good.
+	_ = m.writeBackupLocked(content)
 	return true, nil
 }
 
@@ -69,27 +70,52 @@ func (m *Manager) Apply(ctx context.Context, content []byte) (bool, error) {
 	if err := m.validateContentLocked(ctx, content); err != nil {
 		return false, err
 	}
+	old, _ := os.ReadFile(m.Config)
+	if len(old) > 0 {
+		_ = m.writeBackupLocked(old)
+	}
 	if err := m.writeConfigLocked(content); err != nil {
 		return false, err
 	}
 	if err := m.restartLocked(); err != nil {
-		return false, err
+		return false, m.rollbackLocked(err)
 	}
+	_ = m.writeBackupLocked(content)
 	return true, nil
 }
 
-// ForceApply validates, persists, and restarts even when the file on disk
-// already matches. It is the safety fallback when a partial hot reload fails.
 func (m *Manager) ForceApply(ctx context.Context, content []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.validateContentLocked(ctx, content); err != nil {
 		return err
 	}
+	old, _ := os.ReadFile(m.Config)
+	if len(old) > 0 && hash(old) != hash(content) {
+		_ = m.writeBackupLocked(old)
+	}
 	if err := m.writeConfigLocked(content); err != nil {
 		return err
 	}
-	return m.restartLocked()
+	if err := m.restartLocked(); err != nil {
+		return m.rollbackLocked(err)
+	}
+	_ = m.writeBackupLocked(content)
+	return nil
+}
+
+func (m *Manager) rollbackLocked(cause error) error {
+	backup, err := os.ReadFile(m.backupPath())
+	if err != nil || len(backup) == 0 {
+		return cause
+	}
+	if err := m.writeConfigLocked(backup); err != nil {
+		return fmt.Errorf("new config failed (%v); rollback write failed: %w", cause, err)
+	}
+	if err := m.restartLocked(); err != nil {
+		return fmt.Errorf("new config failed (%v); rollback start failed: %w", cause, err)
+	}
+	return fmt.Errorf("new config failed and was rolled back to last-good: %w", cause)
 }
 
 func (m *Manager) validateContentLocked(ctx context.Context, content []byte) error {
@@ -113,10 +139,18 @@ func (m *Manager) validateContentLocked(ctx context.Context, content []byte) err
 }
 
 func (m *Manager) writeConfigLocked(content []byte) error {
-	if err := os.MkdirAll(filepath.Dir(m.Config), 0o755); err != nil {
+	return atomicWrite(m.Config, content, 0o600)
+}
+
+func (m *Manager) writeBackupLocked(content []byte) error {
+	return atomicWrite(m.backupPath(), content, 0o600)
+}
+
+func atomicWrite(path string, content []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(m.Config), ".xnode-config-*.json")
+	f, err := os.CreateTemp(filepath.Dir(path), ".xnode-write-*")
 	if err != nil {
 		return err
 	}
@@ -127,7 +161,7 @@ func (m *Manager) writeConfigLocked(content []byte) error {
 			_ = os.Remove(name)
 		}
 	}()
-	if err := f.Chmod(0o600); err != nil {
+	if err := f.Chmod(mode); err != nil {
 		_ = f.Close()
 		return err
 	}
@@ -142,7 +176,7 @@ func (m *Manager) writeConfigLocked(content []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(name, m.Config); err != nil {
+	if err := os.Rename(name, path); err != nil {
 		return err
 	}
 	cleanup = false
@@ -162,17 +196,36 @@ func (m *Manager) Stop() error    { m.mu.Lock(); defer m.mu.Unlock(); return m.s
 func (m *Manager) Running() bool  { m.mu.Lock(); defer m.mu.Unlock(); return m.isRunningLocked() }
 
 func (m *Manager) startLocked() error {
+	if m.LimitsFile != "" {
+		_ = os.Remove(m.LimitsFile + ".core-ready")
+	}
 	cmd := exec.Command(m.Binary, "run", "-c", m.Config)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = m.commandEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	m.cmd = cmd
 	go func(c *exec.Cmd) { _ = c.Wait() }(cmd)
+	// Detect immediate crashes/config/runtime failures instead of reporting a
+	// successful recovery just because fork/exec succeeded.
+	time.Sleep(350 * time.Millisecond)
+	if !m.isRunningLocked() {
+		return fmt.Errorf("xray exited during startup grace period")
+	}
 	return nil
 }
+
+func (m *Manager) commandEnv() []string {
+	env := os.Environ()
+	if m.LimitsFile != "" {
+		env = append(env, "XNODE_LIMITS_FILE="+m.LimitsFile)
+	}
+	return env
+}
+
 func (m *Manager) stopLocked() error {
 	if !m.isRunningLocked() {
 		m.cmd = nil
@@ -196,9 +249,43 @@ func (m *Manager) isRunningLocked() bool {
 	if m.cmd == nil || m.cmd.Process == nil {
 		return false
 	}
-	err := m.cmd.Process.Signal(syscall.Signal(0))
+	return m.cmd.Process.Signal(syscall.Signal(0)) == nil
+}
+
+func (m *Manager) Recover() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.restartLocked(); err == nil {
+		return nil
+	}
+	backup, err := os.ReadFile(m.backupPath())
+	if err != nil || len(backup) == 0 {
+		return fmt.Errorf("xray recovery failed and no last-good config is available")
+	}
+	if err := m.writeConfigLocked(backup); err != nil {
+		return err
+	}
+	return m.restartLocked()
+}
+
+func (m *Manager) CorePatchReady() bool {
+	if m.LimitsFile == "" {
+		return false
+	}
+	_, err := os.Stat(m.LimitsFile + ".core-ready")
 	return err == nil
 }
+
+func (m *Manager) APIHealthy(ctx context.Context) bool {
+	if !m.Running() {
+		return false
+	}
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, m.Binary, "api", "statsquery", "--server="+m.API).CombinedOutput()
+	return err == nil && len(out) > 0
+}
+
 func (m *Manager) Version(ctx context.Context) string {
 	out, err := exec.CommandContext(ctx, m.Binary, "version").CombinedOutput()
 	if err != nil {
