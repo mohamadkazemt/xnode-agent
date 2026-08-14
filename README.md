@@ -1,4 +1,3 @@
-
 # xnode-agent v1.0.0
 
 `xnode-agent` is a node-side control plane for Xray. Your panel stays the source of truth; each server runs one small Go agent that generates/validates Xray configuration, applies safe runtime changes, collects billing/online state, enforces user policy, monitors the node, and recovers Xray when needed.
