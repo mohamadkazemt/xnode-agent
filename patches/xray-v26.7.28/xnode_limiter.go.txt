@@ -26,6 +26,7 @@ type xnodePolicy struct {
 
 type xnodePolicyFile struct {
 	Version int                    `json:"version"`
+	Mode    string                 `json:"mode"`
 	Users   map[string]xnodePolicy `json:"users"`
 }
 
@@ -39,6 +40,7 @@ var xnodeLimiter = struct {
 	path        string
 	checkedAt   time.Time
 	mtime       time.Time
+	mode        string
 	policies    map[string]xnodePolicy
 	connections map[string]int
 	ips         map[string]map[string]int
@@ -67,6 +69,7 @@ func xnodeRefreshPolicies() {
 	path := os.Getenv("XNODE_LIMITS_FILE")
 	if path == "" {
 		xnodeLimiter.policies = map[string]xnodePolicy{}
+		xnodeLimiter.mode = "active"
 		xnodeLimiter.path = ""
 		xnodeLimiter.mtime = time.Time{}
 		return
@@ -74,6 +77,7 @@ func xnodeRefreshPolicies() {
 	st, err := os.Stat(path)
 	if err != nil {
 		xnodeLimiter.policies = map[string]xnodePolicy{}
+		xnodeLimiter.mode = "active"
 		return
 	}
 	if path == xnodeLimiter.path && st.ModTime().Equal(xnodeLimiter.mtime) {
@@ -89,7 +93,22 @@ func xnodeRefreshPolicies() {
 	}
 	xnodeLimiter.path = path
 	xnodeLimiter.mtime = st.ModTime()
+	xnodeLimiter.mode = doc.Mode
+	if xnodeLimiter.mode == "" {
+		xnodeLimiter.mode = "active"
+	}
 	xnodeLimiter.policies = doc.Users
+}
+
+func xnodeMode() string {
+	xnodeRefreshPolicies()
+	xnodeLimiter.Lock()
+	mode := xnodeLimiter.mode
+	xnodeLimiter.Unlock()
+	if mode == "" {
+		return "active"
+	}
+	return mode
 }
 
 func xnodePolicyFor(email string) xnodePolicy {
@@ -123,6 +142,9 @@ func xnodeSourceIP(ctx context.Context) string {
 // attached the MemoryUser to the session context. It therefore limits logical
 // dispatched connections rather than kernel sockets or source-IP guesses.
 func xnodeAdmit(ctx context.Context) error {
+	if xnodeMode() == "draining" {
+		return fmt.Errorf("xnode: node is draining")
+	}
 	email := xnodeEmail(ctx)
 	if email == "" {
 		return nil
