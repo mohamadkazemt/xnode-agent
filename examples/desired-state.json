@@ -1,0 +1,45 @@
+{
+  "version": "42",
+  "enabled": true,
+  "mode": "active",
+  "inbounds": [
+    {
+      "id": "101",
+      "tag": "vless-reality-443",
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {"decryption": "none"},
+      "stream_settings": {
+        "method": "raw",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "target": "www.example.com:443",
+          "serverNames": ["www.example.com"],
+          "privateKey": "REPLACE_ME",
+          "shortIds": ["0123456789abcdef"]
+        }
+      },
+      "users": [
+        {
+          "id": "25",
+          "enabled": true,
+          "credential": {"id": "550e8400-e29b-41d4-a716-446655440000", "flow": "xtls-rprx-vision"},
+          "limits": {"traffic_bytes": 536870912000, "download_bps": 100000000, "ip_limit": 2, "connection_limit": 20}
+        }
+      ]
+    },
+    {
+      "id": "wg-1",
+      "tag": "wireguard-51820",
+      "listen": "0.0.0.0",
+      "port": 51820,
+      "protocol": "wireguard",
+      "settings": {"secretKey": "REPLACE_PRIVATE_KEY", "mtu": 1420},
+      "users": [
+        {"id":"wg-user-1","enabled":true,"credential":{"publicKey":"REPLACE_PUBLIC_KEY","allowedIPs":["10.0.0.2/32"]}}
+      ]
+    }
+  ]
+}
