@@ -1,55 +1,42 @@
-# Roadmap
+# Project status
 
-## v0.1 — delivered
+## v1.0.0 — feature-complete node layer
 
-- Declarative panel -> node sync
-- Multi-inbound config
-- Generic Xray settings passthrough
-- VLESS/VMess/Trojan/Shadowsocks managed users
-- WireGuard peer config
-- Per-user/per-inbound native accounting key for client protocols
-- Stats upload
-- Heartbeat
-- Config validation and atomic apply
-- Basic recovery
-- Limit policy model + backend interface
+Delivered:
 
-## v0.2 — delivered
+- declarative panel -> node synchronization;
+- multi-inbound lifecycle and generic Xray config passthrough;
+- runtime HandlerService reconciliation with validated restart fallback;
+- managed VLESS/VMess/Trojan/Shadowsocks users and WireGuard peers;
+- per-user/per-inbound traffic accounting and retry-safe billing spool;
+- traffic quota, expiration, IP limit and credential-per-device limit;
+- exact online-IP integration with access-log fallback;
+- per-user routing and protocol membership;
+- suspend/resume and session-generation disconnect;
+- maintained Xray v26.7.28 dispatcher overlay for aggregate upload/download speed limits and exact concurrent connection admission;
+- active-session cutoff and removed-user tombstones;
+- node active/draining/maintenance/disabled modes;
+- traffic-threshold drain, region/group/tags/weight telemetry;
+- CPU/RAM/load/network monitoring, health checks, restart/recovery and last-good rollback;
+- loopback admin health/readiness/status API;
+- systemd, logrotate, installer and CI for both agent and patched Xray.
 
-- Desired/current diff engine
-- HandlerService-backed runtime add/remove inbound via `api adi/rmi`
-- Runtime add/remove user via `api adu/rmu`
-- Runtime credential replacement as remove + add
-- Unsupported/unsafe mutations fall back to validated restart
-- Persist desired config after successful hot reload
-- New user policy levels force a restart to preserve Xray stats accounting
-- Unit tests for runtime planning and fallback decisions
+## Control-plane responsibilities
 
-## v0.3
+These are intentionally not implemented inside a single node agent because they require a global view of multiple servers:
 
-- Strict speed limiter
-- IP limit
-- connection limit
-- quota cutoff
-- expiration cutoff
-- device credential lifecycle
-- active session registry and disconnect
-- proper draining state
-- local diagnostics HTTP endpoint
-- config rollback history
+- cross-node user assignment;
+- global weighted load balancing;
+- failover ordering and DNS/endpoint switching;
+- group/region capacity policy;
+- billing/business logic and credential issuance.
 
-## v0.4
+The heartbeat and node policy model expose the health/mode/weight/region/group/traffic data a panel needs to implement those functions.
 
-- Node metrics: CPU/RAM/disk/network
-- Prometheus/OpenTelemetry
-- node weights
-- traffic thresholds
-- control-plane failover policies
-- node groups/tags/regions
+## Optional future improvements
 
-## v0.5
-
-- Per-peer WireGuard accounting backend
-- advanced routing controls
-- certificate lifecycle integration
-- signed desired-state payloads / token rotation
+- mTLS/signed desired-state payloads in addition to bearer tokens;
+- first-class Prometheus/OpenTelemetry exporter;
+- dedicated WireGuard per-peer byte accounting provider;
+- automated release artifacts for the patched Xray binary;
+- multi-version Xray patch matrix after upstream upgrades.

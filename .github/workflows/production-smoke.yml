@@ -1,0 +1,23 @@
+name: production-smoke
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Unit, vet and build
+        run: |
+          go test ./...
+          go vet ./...
+          go build ./cmd/xnode-agent
+      - name: Validate examples
+        run: |
+          python3 -m json.tool examples/agent.json >/dev/null
+          python3 -m json.tool examples/desired-state.json >/dev/null

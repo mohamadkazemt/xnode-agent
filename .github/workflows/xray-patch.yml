@@ -1,0 +1,40 @@
+name: xray-patch
+on:
+  push:
+    paths:
+      - 'patches/xray-v26.7.28/**'
+      - '.github/workflows/xray-patch.yml'
+  pull_request:
+    paths:
+      - 'patches/xray-v26.7.28/**'
+      - '.github/workflows/xray-patch.yml'
+permissions:
+  contents: read
+jobs:
+  build-patched-xray:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout xnode-agent
+        uses: actions/checkout@v4
+        with:
+          path: xnode
+      - name: Checkout official Xray pin
+        uses: actions/checkout@v4
+        with:
+          repository: XTLS/Xray-core
+          ref: v26.7.28
+          path: xray
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: Overlay xnode limiter
+        run: |
+          cp xnode/patches/xray-v26.7.28/xnode_limiter.go.txt xray/app/dispatcher/xnode_limiter.go
+          cp xnode/patches/xray-v26.7.28/xnode_limiter_test.go.txt xray/app/dispatcher/xnode_limiter_test.go
+          python3 xnode/patches/xray-v26.7.28/patch_default.py xray/app/dispatcher/default.go
+      - name: Test dispatcher patch
+        working-directory: xray
+        run: go test ./app/dispatcher
+      - name: Build Xray
+        working-directory: xray
+        run: go build -trimpath -o xray ./main

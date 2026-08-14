@@ -8,14 +8,18 @@ import (
 	"xnode-agent/internal/model"
 )
 
-func accountingEmail(userID, inboundID string) string {
+func AccountingEmail(userID, inboundID string) string {
 	r := strings.NewReplacer(">", "_", "|", "_", " ", "_")
 	return "u:" + r.Replace(userID) + "|i:" + r.Replace(inboundID)
 }
 
-func BuildConfig(state model.DesiredState, apiListen string) ([]byte, error) {
+func BuildConfig(state model.DesiredState, apiListen string, accessLog ...string) ([]byte, error) {
+	logCfg := map[string]any{"loglevel": "warning"}
+	if len(accessLog) > 0 && accessLog[0] != "" {
+		logCfg["access"] = accessLog[0]
+	}
 	cfg := map[string]any{
-		"log": map[string]any{"loglevel": "warning"},
+		"log": logCfg,
 		"api": map[string]any{
 			"tag":      "api",
 			"listen":   apiListen,
@@ -51,12 +55,12 @@ func BuildConfig(state model.DesiredState, apiListen string) ([]byte, error) {
 		}
 		cfg["outbounds"] = outs
 	}
-	if len(state.Routing) > 0 {
-		var v any
-		if err := json.Unmarshal(state.Routing, &v); err != nil {
-			return nil, fmt.Errorf("routing: %w", err)
-		}
-		cfg["routing"] = v
+	routing, hasRouting, err := buildRouting(state)
+	if err != nil {
+		return nil, err
+	}
+	if hasRouting {
+		cfg["routing"] = routing
 	}
 	if len(state.DNS) > 0 {
 		var v any
@@ -69,13 +73,13 @@ func BuildConfig(state model.DesiredState, apiListen string) ([]byte, error) {
 }
 
 func statsLevels(state model.DesiredState) map[string]any {
-	levels := map[string]any{"0": map[string]any{"statsUserUplink": true, "statsUserDownlink": true}}
+	levels := map[string]any{"0": map[string]any{"statsUserUplink": true, "statsUserDownlink": true, "statsUserOnline": true}}
 	for _, in := range state.Inbounds {
 		for _, u := range in.Users {
 			if !u.Enabled {
 				continue
 			}
-			levels[fmt.Sprintf("%d", u.Level)] = map[string]any{"statsUserUplink": true, "statsUserDownlink": true}
+			levels[fmt.Sprintf("%d", u.Level)] = map[string]any{"statsUserUplink": true, "statsUserDownlink": true, "statsUserOnline": true}
 		}
 	}
 	return levels
@@ -104,7 +108,9 @@ func buildInbound(in model.ManagedInbound) (map[string]any, error) {
 		clients := make([]any, 0, len(active))
 		for _, u := range active {
 			client := cloneMap(u.Credential)
-			client["email"] = accountingEmail(u.ID, in.ID)
+			// Always use a deterministic per-user/per-inbound email so Xray's
+			// native user counters can be attributed without ambiguity.
+			client["email"] = AccountingEmail(u.ID, in.ID)
 			client["level"] = u.Level
 			clients = append(clients, client)
 		}
@@ -118,7 +124,8 @@ func buildInbound(in model.ManagedInbound) (map[string]any, error) {
 			settings["peers"] = peers
 		}
 	default:
-		// Generic protocols are passed through as-is.
+		// Generic protocols are passed through as-is. This keeps the agent compatible
+		// with new Xray protocols without waiting for an agent release.
 	}
 	obj["settings"] = settings
 	if in.StreamSettings != nil {
@@ -128,6 +135,45 @@ func buildInbound(in model.ManagedInbound) (map[string]any, error) {
 		obj["sniffing"] = in.Sniffing
 	}
 	return obj, nil
+}
+
+func buildRouting(state model.DesiredState) (map[string]any, bool, error) {
+	base := map[string]any{}
+	if len(state.Routing) > 0 {
+		if err := json.Unmarshal(state.Routing, &base); err != nil {
+			return nil, false, fmt.Errorf("routing: %w", err)
+		}
+	}
+	var existing []any
+	if raw, ok := base["rules"].([]any); ok {
+		existing = raw
+	}
+	managed := make([]any, 0)
+	for _, in := range state.Inbounds {
+		for _, u := range in.Users {
+			if !u.Enabled || u.OutboundTag == "" {
+				continue
+			}
+			managed = append(managed, map[string]any{
+				"type":        "field",
+				"ruleTag":     "xnode-user-" + sanitizeTag(in.ID) + "-" + sanitizeTag(u.ID),
+				"user":        []string{AccountingEmail(u.ID, in.ID)},
+				"outboundTag": u.OutboundTag,
+			})
+		}
+	}
+	if len(managed) == 0 && len(base) == 0 {
+		return nil, false, nil
+	}
+	if len(managed) > 0 {
+		base["rules"] = append(managed, existing...)
+	}
+	return base, true, nil
+}
+
+func sanitizeTag(s string) string {
+	r := strings.NewReplacer(" ", "_", ">", "_", "|", "_", "/", "_")
+	return r.Replace(s)
 }
 
 func cloneMap(src map[string]any) map[string]any {
@@ -141,20 +187,27 @@ func cloneMap(src map[string]any) map[string]any {
 	return dst
 }
 
+func ParseAccountingEmail(email string) (userID, inboundID string, ok bool) {
+	if !strings.HasPrefix(email, "u:") {
+		return "", "", false
+	}
+	x := strings.SplitN(strings.TrimPrefix(email, "u:"), "|i:", 2)
+	if len(x) != 2 || x[0] == "" || x[1] == "" {
+		return "", "", false
+	}
+	return x[0], x[1], true
+}
+
 func ParseAccountingName(name string) (userID, inboundID, direction string, ok bool) {
 	parts := strings.Split(name, ">>>")
 	if len(parts) != 4 || parts[0] != "user" || parts[2] != "traffic" {
 		return "", "", "", false
 	}
-	meta := parts[1]
-	if !strings.HasPrefix(meta, "u:") {
+	userID, inboundID, ok = ParseAccountingEmail(parts[1])
+	if !ok {
 		return "", "", "", false
 	}
-	x := strings.SplitN(strings.TrimPrefix(meta, "u:"), "|i:", 2)
-	if len(x) != 2 {
-		return "", "", "", false
-	}
-	return x[0], x[1], parts[3], true
+	return userID, inboundID, parts[3], true
 }
 
 // BuildInboundDocument returns a minimal Xray JSON document accepted by

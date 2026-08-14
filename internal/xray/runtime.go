@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -96,7 +97,7 @@ func PlanRuntime(previous, desired model.DesiredState) RuntimePlan {
 				plan.Operations = append(plan.Operations, RuntimeOp{
 					Kind:      RuntimeRemoveUser,
 					OldTag:    old.Tag,
-					UserEmail: accountingEmail(oldUser.ID, old.ID),
+					UserEmail: AccountingEmail(oldUser.ID, old.ID),
 				})
 			}
 		}
@@ -118,7 +119,33 @@ func PlanRuntime(previous, desired model.DesiredState) RuntimePlan {
 func runtimeGlobalEqual(a, b model.DesiredState) bool {
 	return rawMessagesEqual(a.Outbounds, b.Outbounds) &&
 		bytesJSONEqual(a.Routing, b.Routing) &&
-		bytesJSONEqual(a.DNS, b.DNS)
+		bytesJSONEqual(a.DNS, b.DNS) &&
+		managedRoutingEqual(a, b)
+}
+
+func managedRoutingEqual(a, b model.DesiredState) bool {
+	type route struct {
+		InboundID, UserID, OutboundTag string
+		Enabled                        bool
+	}
+	collect := func(s model.DesiredState) []route {
+		var out []route
+		for _, in := range s.Inbounds {
+			for _, u := range in.Users {
+				if u.OutboundTag != "" {
+					out = append(out, route{in.ID, u.ID, u.OutboundTag, u.Enabled})
+				}
+			}
+		}
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].InboundID == out[j].InboundID {
+				return out[i].UserID < out[j].UserID
+			}
+			return out[i].InboundID < out[j].InboundID
+		})
+		return out
+	}
+	return reflect.DeepEqual(collect(a), collect(b))
 }
 
 func rawMessagesEqual(a, b []json.RawMessage) bool {

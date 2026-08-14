@@ -1,0 +1,37 @@
+package dispatcher
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestXnodePolicyReload(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "limits.json")
+	if err := os.WriteFile(p, []byte(`{"version":1,"users":{"u:1|i:2":{"upload_bps":1000,"download_bps":2000,"connection_limit":3,"session_generation":9}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XNODE_LIMITS_FILE", p)
+	xnodeLimiter.Lock()
+	xnodeLimiter.checkedAt = time.Time{}
+	xnodeLimiter.path = ""
+	xnodeLimiter.policies = map[string]xnodePolicy{}
+	xnodeLimiter.Unlock()
+	got := xnodePolicyFor("u:1|i:2")
+	if got.UploadBPS != 1000 || got.DownloadBPS != 2000 || got.ConnectionLimit != 3 || got.SessionGeneration != 9 {
+		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestXnodeWaitUnlimited(t *testing.T) {
+	t.Setenv("XNODE_LIMITS_FILE", "")
+	xnodeLimiter.Lock()
+	xnodeLimiter.checkedAt = time.Time{}
+	xnodeLimiter.Unlock()
+	if err := xnodeWait(context.Background(), "u:1|i:2", 0, false, 1024); err != nil {
+		t.Fatal(err)
+	}
+}

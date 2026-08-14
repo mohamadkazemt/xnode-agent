@@ -67,6 +67,13 @@ func (c *Client) Heartbeat(ctx context.Context, hb model.Heartbeat) error {
 }
 
 func (c *Client) Traffic(ctx context.Context, nodeID string, records []model.TrafficRecord) error {
-	payload := map[string]any{"node_id": nodeID, "records": records}
-	return c.do(ctx, http.MethodPost, "/api/v1/nodes/"+nodeID+"/traffic", payload, nil)
+	return c.TrafficBatch(ctx, model.TrafficBatch{NodeID: nodeID, Records: records})
+}
+
+func (c *Client) TrafficBatch(ctx context.Context, batch model.TrafficBatch) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/nodes/"+batch.NodeID+"/traffic", batch, nil)
+}
+
+func (c *Client) Sessions(ctx context.Context, report model.SessionReport) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/nodes/"+report.NodeID+"/sessions", report, nil)
 }

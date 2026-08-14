@@ -3,7 +3,9 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
+	"strings"
 
 	"xnode-agent/internal/model"
 )
@@ -20,6 +22,9 @@ func Load(path string) (model.AgentConfig, error) {
 	if cfg.NodeID == "" || cfg.PanelURL == "" || cfg.PanelToken == "" {
 		return cfg, fmt.Errorf("node_id, panel_url and panel_token are required")
 	}
+	if !strings.HasPrefix(cfg.PanelURL, "https://") && !strings.HasPrefix(cfg.PanelURL, "http://127.0.0.1") && !strings.HasPrefix(cfg.PanelURL, "http://localhost") {
+		return cfg, fmt.Errorf("panel_url must use HTTPS unless it is loopback")
+	}
 	if cfg.SyncSeconds <= 0 {
 		cfg.SyncSeconds = 15
 	}
@@ -32,11 +37,34 @@ func Load(path string) (model.AgentConfig, error) {
 	if cfg.XrayAPI == "" {
 		cfg.XrayAPI = "127.0.0.1:10085"
 	}
+	host, _, err := net.SplitHostPort(cfg.XrayAPI)
+	if err != nil || (host != "127.0.0.1" && host != "localhost" && host != "::1") {
+		return cfg, fmt.Errorf("xray_api must listen on loopback")
+	}
+	if cfg.XrayAccessLog == "" {
+		cfg.XrayAccessLog = "/var/log/xnode/xray-access.log"
+	}
+	if cfg.XrayLimitsFile == "" {
+		cfg.XrayLimitsFile = "/var/lib/xnode/limits.json"
+	}
 	if cfg.StateFile == "" {
 		cfg.StateFile = "/var/lib/xnode/state.json"
 	}
+	if cfg.TrafficSpoolDir == "" {
+		cfg.TrafficSpoolDir = "/var/lib/xnode/traffic-spool"
+	}
+	if cfg.IPWindowSeconds <= 0 {
+		cfg.IPWindowSeconds = 120
+	}
 	if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1:19090"
+	}
+	listenHost, _, err := net.SplitHostPort(cfg.Listen)
+	if err != nil || (listenHost != "127.0.0.1" && listenHost != "localhost" && listenHost != "::1") {
+		return cfg, fmt.Errorf("listen must be loopback")
+	}
+	if cfg.Weight <= 0 {
+		cfg.Weight = 100
 	}
 	return cfg, nil
 }
