@@ -17,7 +17,7 @@ import (
 	"xnode-agent/internal/xray"
 )
 
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 type Agent struct {
 	Cfg          model.AgentConfig
@@ -51,6 +51,7 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) sync(ctx context.Context) error {
+	previous, havePrevious := a.loadState()
 	state, err := a.Panel.DesiredState(ctx, a.Cfg.NodeID)
 	if err != nil {
 		a.sendHeartbeat(ctx, false, err.Error())
@@ -59,7 +60,7 @@ func (a *Agent) sync(ctx context.Context) error {
 	if !state.Enabled || state.Mode == "disabled" || state.Mode == "maintenance" {
 		_ = a.Xray.Stop()
 		a.stateVersion = state.Version
-		a.persistState(state)
+		_ = a.persistState(state)
 		a.sendHeartbeat(ctx, true, "node disabled/maintenance")
 		return nil
 	}
@@ -68,16 +69,50 @@ func (a *Agent) sync(ctx context.Context) error {
 		a.sendHeartbeat(ctx, false, err.Error())
 		return err
 	}
-	changed, err := a.Xray.Apply(ctx, cfg)
-	if err != nil {
-		a.sendHeartbeat(ctx, false, err.Error())
-		return err
-	}
-	if !changed && !a.Xray.Running() {
-		if err := a.Xray.Start(); err != nil {
+
+	if a.Xray.Running() && havePrevious && previous.Enabled && previous.Mode != "disabled" && previous.Mode != "maintenance" {
+		plan := xray.PlanRuntime(previous, state)
+		if !plan.RequiresRestart {
+			// Validate the complete persisted config before changing live state.
+			if err := a.Xray.ValidateContent(ctx, cfg); err == nil {
+				if err = a.Xray.ApplyRuntime(ctx, plan); err == nil {
+					if _, err = a.Xray.Store(ctx, cfg); err == nil {
+						log.Printf("hot reload: %d operation(s)", len(plan.Operations))
+					} else {
+						log.Printf("hot reload config persistence failed, restarting: %v", err)
+					}
+				} else {
+					log.Printf("hot reload failed, restarting with desired config: %v", err)
+				}
+			} else {
+				log.Printf("desired config validation failed before hot reload: %v", err)
+			}
+			if err != nil {
+				if fallbackErr := a.Xray.ForceApply(ctx, cfg); fallbackErr != nil {
+					a.sendHeartbeat(ctx, false, fallbackErr.Error())
+					return errors.Join(err, fallbackErr)
+				}
+			}
+		} else {
+			log.Printf("hot reload skipped: %s", plan.Reason)
+			if err := a.Xray.ForceApply(ctx, cfg); err != nil {
+				a.sendHeartbeat(ctx, false, err.Error())
+				return err
+			}
+		}
+	} else {
+		changed, err := a.Xray.Apply(ctx, cfg)
+		if err != nil {
+			a.sendHeartbeat(ctx, false, err.Error())
 			return err
 		}
+		if !changed && !a.Xray.Running() {
+			if err := a.Xray.Start(); err != nil {
+				return err
+			}
+		}
 	}
+
 	if err := a.applyLimits(ctx, state); err != nil {
 		log.Printf("limits: %v", err)
 	}
@@ -113,6 +148,18 @@ func (a *Agent) sendHeartbeat(ctx context.Context, healthy bool, msg string) {
 	if err := a.Panel.Heartbeat(ctx, hb); err != nil {
 		log.Printf("heartbeat: %v", err)
 	}
+}
+
+func (a *Agent) loadState() (model.DesiredState, bool) {
+	var state model.DesiredState
+	b, err := os.ReadFile(a.Cfg.StateFile)
+	if err != nil {
+		return state, false
+	}
+	if err := json.Unmarshal(b, &state); err != nil {
+		return model.DesiredState{}, false
+	}
+	return state, true
 }
 
 func (a *Agent) persistState(state model.DesiredState) error {

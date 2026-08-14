@@ -156,3 +156,24 @@ func ParseAccountingName(name string) (userID, inboundID, direction string, ok b
 	}
 	return x[0], x[1], parts[3], true
 }
+
+// BuildInboundDocument returns a minimal Xray JSON document accepted by
+// `xray api adi`. It intentionally uses the same builder as the persisted
+// configuration so hot-reloaded and restart-loaded inbounds stay identical.
+func BuildInboundDocument(in model.ManagedInbound) ([]byte, error) {
+	obj, err := buildInbound(in)
+	if err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(map[string]any{"inbounds": []any{obj}}, "", "  ")
+}
+
+// BuildUserDocument returns a one-user inbound document accepted by
+// `xray api adu`. The Xray CLI builds the inbound config and extracts its user
+// object before calling HandlerService.AlterInbound(AddUserOperation).
+func BuildUserDocument(in model.ManagedInbound, user model.ManagedUser) ([]byte, error) {
+	one := in
+	user.Enabled = true
+	one.Users = []model.ManagedUser{user}
+	return BuildInboundDocument(one)
+}

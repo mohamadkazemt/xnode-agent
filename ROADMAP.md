@@ -14,15 +14,16 @@
 - Basic recovery
 - Limit policy model + backend interface
 
-## v0.2
+## v0.2 — delivered
 
 - Desired/current diff engine
-- Xray HandlerService runtime add/remove inbound
-- Runtime add/remove user on supported protocols
-- Connection/session registry
-- Proper draining state
-- Config rollback history
-- Local diagnostics HTTP endpoint
+- HandlerService-backed runtime add/remove inbound via `api adi/rmi`
+- Runtime add/remove user via `api adu/rmu`
+- Runtime credential replacement as remove + add
+- Unsupported/unsafe mutations fall back to validated restart
+- Persist desired config after successful hot reload
+- New user policy levels force a restart to preserve Xray stats accounting
+- Unit tests for runtime planning and fallback decisions
 
 ## v0.3
 
@@ -32,7 +33,10 @@
 - quota cutoff
 - expiration cutoff
 - device credential lifecycle
-- active session disconnect
+- active session registry and disconnect
+- proper draining state
+- local diagnostics HTTP endpoint
+- config rollback history
 
 ## v0.4
 
