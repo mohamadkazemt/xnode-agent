@@ -1,0 +1,11 @@
+{
+  "node_id": "node-12",
+  "panel_url": "https://panel.example.com",
+  "panel_token": "CHANGE_ME",
+  "sync_seconds": 15,
+  "xray_binary": "/usr/local/bin/xray",
+  "xray_config": "/etc/xnode/xray.json",
+  "xray_api": "127.0.0.1:10085",
+  "state_file": "/var/lib/xnode/state.json",
+  "listen": "127.0.0.1:19090"
+}
