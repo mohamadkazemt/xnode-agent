@@ -1,5 +1,7 @@
 # Panel API contract — v1.0
 
+[English](PANEL_API.md) | [فارسی](fa/PANEL_API.md)
+
 Every agent request uses:
 
 ```http
@@ -174,3 +176,4 @@ The native `xray-online` IP list represents currently referenced IPs. `recent_co
 - Use a monotonically changing `version` for observability.
 - Heartbeats/session reports should tolerate retries.
 - Traffic processing is keyed by `event_id`, not arrival time.
+
