@@ -1,0 +1,15 @@
+# Build outputs
+/bin/
+/dist/
+xnode-agent
+*.exe
+
+# Local config / secrets
+agent.json
+.env
+.env.*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
