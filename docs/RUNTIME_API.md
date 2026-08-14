@@ -1,5 +1,7 @@
 # Runtime Xray API behavior
 
+[English](RUNTIME_API.md) | [فارسی](fa/RUNTIME_API.md)
+
 v0.2 uses Xray's own `api` subcommands as the compatibility layer over HandlerService.
 
 ## Add inbound
@@ -43,3 +45,4 @@ xray api rmu --server=127.0.0.1:10085 -tag=vless-443 'u:25|i:101'
 Every desired full config is validated before runtime mutations. If any runtime command fails, `xnode-agent` performs a full validated config apply and restarts Xray.
 
 This is important for protocol/version differences. For example, some inbound implementations may not expose Xray's `UserManager` runtime interface even if their static JSON has a user list.
+
