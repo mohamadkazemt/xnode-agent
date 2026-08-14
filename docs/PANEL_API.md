@@ -38,7 +38,7 @@ Top-level example:
 Modes:
 
 - `active`: normal convergence.
-- `draining`: retain existing inbound/user membership but refuse newly introduced membership; report `drain_ready` when online users are at/below `drain_target_online`.
+- `draining`: keep current membership/configuration, reject new authenticated dispatcher sessions in the patched core, allow already-admitted sessions to finish, and report `drain_ready` when online users are at/below `drain_target_online`.
 - `maintenance`: collect/report state and stop Xray.
 - `disabled`: stop Xray and remain disabled.
 
