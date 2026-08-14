@@ -1,3 +1,4 @@
+
 # xnode-agent v1.0.0
 
 `xnode-agent` is a node-side control plane for Xray. Your panel stays the source of truth; each server runs one small Go agent that generates/validates Xray configuration, applies safe runtime changes, collects billing/online state, enforces user policy, monitors the node, and recovers Xray when needed.
@@ -70,13 +71,18 @@ The `xray-patch` GitHub Actions workflow also checks out the pinned official Xra
 
 ## Production install
 
-Copy `examples/agent.json`, set a unique panel token, then run as root:
+On Debian, Ubuntu, and most systemd-based Linux distributions, install the latest
+release (agent plus patched Xray) with:
 
 ```bash
-sudo ./scripts/install.sh /path/to/agent.json
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/mohamadkazemt/xnode-agent/main/scripts/install.sh)"
 ```
 
-The installer builds the pinned patched Xray core and installs the agent, Xray, systemd unit and logrotate policy. See `docs/DEPLOYMENT.md`.
+The installer prompts for the node ID, panel URL, and token. For unattended use,
+pass `--node-id`, `--panel-url`, and `--panel-token` after `bash -s --`, or use
+`--config /path/to/agent.json`. It detects amd64/arm64, verifies the release with
+`SHA256SUMS`, installs systemd and logrotate integration, and rolls back a failed
+install. See `docs/DEPLOYMENT.md` for flags, upgrades, and removal.
 
 ## Panel integration
 
@@ -103,3 +109,4 @@ The exact JSON contract and retry/idempotency rules are in `docs/PANEL_API.md` a
 ## Xray pin
 
 v1.0 maintains its dispatcher overlay against **Xray v26.7.28**. Upgrade the pin only with a new patch directory and a green `xray-patch` workflow; do not silently point the existing overlay at another Xray revision.
+
