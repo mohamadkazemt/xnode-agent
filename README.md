@@ -51,7 +51,7 @@ The agent additionally enforces:
 ### Node management primitives
 
 - `active`, `draining`, `maintenance`, `disabled` modes.
-- drain readiness based on online users.
+- true drain admission: the patched core rejects new authenticated dispatcher sessions while existing sessions are allowed to finish; `drain_ready` becomes true when online users reach the target.
 - traffic-threshold-triggered drain.
 - region, group, tags and node weight in heartbeat.
 - Xray API health check, auto restart, recovery and last-good rollback.

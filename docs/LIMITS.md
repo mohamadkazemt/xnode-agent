@@ -60,6 +60,12 @@ That is roughly 20 Mbit/s upload and 100 Mbit/s download. A shared per-user/dire
 
 `connection_limit` is enforced at Xray dispatcher admission for the patched core. Every authenticated logical dispatcher connection is counted even if no limit is currently configured, so lowering a limit later is visible to existing sessions on subsequent I/O.
 
+## Node drain admission
+
+When node mode is `draining`, the agent keeps the current Xray configuration and policy identities in place, while the patched dispatcher rejects **new authenticated dispatcher admissions**. Connections that were already admitted are not disconnected merely because drain mode started, so they can finish naturally. The agent reports `drain_ready` when online users reach the panel-provided target.
+
+This is intentionally different from `maintenance` or `disabled`, which stop Xray.
+
 ## Suspend / resume
 
 Set `enabled:false` to suspend a credential. HandlerService removes it from authentication and the strict policy marks it blocked. Set `enabled:true` again to resume it.

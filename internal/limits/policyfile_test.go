@@ -13,7 +13,7 @@ import (
 func TestWriteCorePolicy(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "limits.json")
-	st := model.DesiredState{Inbounds: []model.ManagedInbound{{ID: "101", Users: []model.ManagedUser{{ID: "25", Enabled: true, Limits: model.UserLimits{UploadBPS: 100, DownloadBPS: 200, ConnectionLimit: 3, IPLimit: 2}}}}}}
+	st := model.DesiredState{Mode: "draining", Inbounds: []model.ManagedInbound{{ID: "101", Users: []model.ManagedUser{{ID: "25", Enabled: true, Limits: model.UserLimits{UploadBPS: 100, DownloadBPS: 200, ConnectionLimit: 3, IPLimit: 2}}}}}}
 	if err := WriteCorePolicy(p, st, time.Unix(10, 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -24,6 +24,9 @@ func TestWriteCorePolicy(t *testing.T) {
 	var d CorePolicyFile
 	if err := json.Unmarshal(b, &d); err != nil {
 		t.Fatal(err)
+	}
+	if d.Mode != "draining" {
+		t.Fatalf("mode=%q", d.Mode)
 	}
 	got := d.Users["u:25|i:101"]
 	if got.UploadBPS != 100 || got.DownloadBPS != 200 || got.ConnectionLimit != 3 || got.IPLimit != 2 {
