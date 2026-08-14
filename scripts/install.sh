@@ -82,7 +82,7 @@ mkdir -p "$BACKUP_DIR"
 backup_path() {
   local path=$1 name
   name=${path#/}; name=${name//\//__}
-  [[ -e $path ]] && cp -a "$path" "$BACKUP_DIR/$name"
+  if [[ -e $path ]]; then cp -a "$path" "$BACKUP_DIR/$name"; fi
 }
 
 rollback() {
