@@ -119,7 +119,14 @@ func buildInbound(in model.ManagedInbound) (map[string]any, error) {
 		if len(active) > 0 {
 			peers := make([]any, 0, len(active))
 			for _, u := range active {
-				peers = append(peers, cloneMap(u.Credential))
+				peer := cloneMap(u.Credential)
+				// Xray's WireGuard server converts inbound peers into protocol.User
+				// values and attaches them to the dispatcher session. Supplying the
+				// same deterministic email/level therefore enables native per-peer
+				// traffic, online-IP stats, routing and the xnode data-path limiter.
+				peer["email"] = AccountingEmail(u.ID, in.ID)
+				peer["level"] = u.Level
+				peers = append(peers, peer)
 			}
 			settings["peers"] = peers
 		}

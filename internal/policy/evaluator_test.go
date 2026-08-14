@@ -59,3 +59,17 @@ func TestApplyDrainRejectsNewMembership(t *testing.T) {
 		t.Fatalf("unexpected %#v", got)
 	}
 }
+
+func TestDeviceLimitUsesStrictestAccountCap(t *testing.T) {
+	st := model.DesiredState{Inbounds: []model.ManagedInbound{{ID: "in", Users: []model.ManagedUser{
+		{ID: "d1", AccountID: "a", Enabled: true, Limits: model.UserLimits{DeviceLimit: 3}},
+		{ID: "d2", AccountID: "a", Enabled: true, Limits: model.UserLimits{DeviceLimit: 1}},
+	}}}}
+	got := Evaluate(st, nil, nil, time.Now())
+	if !got.State.Inbounds[0].Users[0].Enabled || got.State.Inbounds[0].Users[1].Enabled {
+		t.Fatalf("unexpected users %#v", got.State.Inbounds[0].Users)
+	}
+	if len(got.Violations) != 1 || got.Violations[0].Limit != 1 {
+		t.Fatalf("violations %#v", got.Violations)
+	}
+}

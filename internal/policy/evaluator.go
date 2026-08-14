@@ -54,17 +54,30 @@ func Evaluate(desired model.DesiredState, sessions []model.SessionRecord, pendin
 			}
 		}
 		// Device limit is enforceable only when the panel issues one credential
-		// per device and assigns the same account_id to those credentials.
-		activeByAccount := map[string]int{}
+		// per device and assigns the same account_id to those credentials. If
+		// credentials disagree on the cap, use the strictest positive value so
+		// desired-state ordering cannot accidentally expand an account's limit.
+		limitByAccount := map[string]int{}
 		for j := range in.Users {
 			u := &in.Users[j]
 			if !u.Enabled || u.AccountID == "" || u.Limits.DeviceLimit <= 0 {
 				continue
 			}
+			if n, ok := limitByAccount[u.AccountID]; !ok || u.Limits.DeviceLimit < n {
+				limitByAccount[u.AccountID] = u.Limits.DeviceLimit
+			}
+		}
+		activeByAccount := map[string]int{}
+		for j := range in.Users {
+			u := &in.Users[j]
+			limit := limitByAccount[u.AccountID]
+			if !u.Enabled || u.AccountID == "" || limit <= 0 {
+				continue
+			}
 			activeByAccount[u.AccountID]++
-			if activeByAccount[u.AccountID] > u.Limits.DeviceLimit {
+			if activeByAccount[u.AccountID] > limit {
 				u.Enabled = false
-				violations = append(violations, model.PolicyViolation{UserID: u.ID, InboundID: in.ID, Reason: "device_limit", Observed: int64(activeByAccount[u.AccountID]), Limit: int64(u.Limits.DeviceLimit)})
+				violations = append(violations, model.PolicyViolation{UserID: u.ID, InboundID: in.ID, Reason: "device_limit", Observed: int64(activeByAccount[u.AccountID]), Limit: int64(limit)})
 			}
 		}
 	}

@@ -32,9 +32,9 @@ With the maintained core overlay, an existing data-path session observes the blo
 
 ## IP limit
 
-The preferred source is Xray's native online-IP map, which tracks active dispatcher references. If that API is unavailable, the agent falls back to accepted access-log records within `ip_window_seconds`.
+With the maintained patched core, `ip_limit` is enforced during authenticated dispatcher admission. The patch keeps ref-counted active source IPs per synthetic user identity; a new distinct IP is rejected immediately when the cap is full. Multiple concurrent connections from an already-admitted IP do not consume additional IP slots.
 
-If unique IPs for `(user_id, inbound_id)` exceed `ip_limit`, the credential is blocked. Set `ip_limit_mode: "off"` for an inbound when Xray sees a CDN/reverse-proxy address instead of the real client.
+The agent also reads Xray's native online-IP map for reporting and policy reconciliation, with accepted access-log records as a compatibility fallback. Set `ip_limit_mode: "off"` for an inbound when Xray sees a CDN/reverse-proxy address instead of the real client.
 
 ## Device limit
 
@@ -58,7 +58,7 @@ That is roughly 20 Mbit/s upload and 100 Mbit/s download. A shared per-user/dire
 
 ## Connection limit
 
-`connection_limit` is exact at Xray dispatcher admission for the patched core. Every authenticated dispatcher connection is counted even if no limit is currently configured, so lowering a limit later can also terminate excess active sessions on subsequent I/O.
+`connection_limit` is enforced at Xray dispatcher admission for the patched core. Every authenticated logical dispatcher connection is counted even if no limit is currently configured, so lowering a limit later is visible to existing sessions on subsequent I/O.
 
 ## Suspend / resume
 
@@ -82,3 +82,7 @@ DELETE /v1/limits/{node}/{inbound}/{user}
 ```
 
 It is not required when the bundled Xray dispatcher overlay is used.
+
+## WireGuard peers
+
+For an inbound WireGuard peer the agent injects the same deterministic `email` and `level` fields used by other managed users. Xray's WireGuard server resolves a peer from its allowed source address, attaches that `MemoryUser` to the dispatcher session, and therefore participates in user traffic stats, online-IP tracking, per-user routing and the dispatcher limiter. Runtime peer membership is still applied by replacing the WireGuard inbound because the current Xray `adu` CLI does not extract WireGuard users.

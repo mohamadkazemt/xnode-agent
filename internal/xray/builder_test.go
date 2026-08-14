@@ -74,3 +74,24 @@ func TestBuildConfigPerUserRouting(t *testing.T) {
 		t.Fatalf("rule=%#v", r)
 	}
 }
+
+func TestBuildWireGuardAccounting(t *testing.T) {
+	st := model.DesiredState{Inbounds: []model.ManagedInbound{{
+		ID: "wg1", Tag: "wg", Protocol: "wireguard", Port: 51820,
+		Settings: map[string]any{"secretKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		Users:    []model.ManagedUser{{ID: "peer1", Enabled: true, Level: 7, Credential: map[string]any{"publicKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "allowedIPs": []string{"10.0.0.2/32"}}}},
+	}}}
+	b, err := BuildConfig(st, "127.0.0.1:10085")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	in := cfg["inbounds"].([]any)[0].(map[string]any)
+	peer := in["settings"].(map[string]any)["peers"].([]any)[0].(map[string]any)
+	if peer["email"] != "u:peer1|i:wg1" || int(peer["level"].(float64)) != 7 {
+		t.Fatalf("unexpected peer %#v", peer)
+	}
+}

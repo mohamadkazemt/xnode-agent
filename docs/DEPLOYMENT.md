@@ -4,8 +4,7 @@
 
 - Linux with systemd and `/proc`.
 - `git` and `python3`.
-- Go 1.23+ for the agent.
-- Go 1.26+ for the pinned Xray v26.7.28 build.
+- Go 1.26+ (required by the pinned Xray v26.7.28 source; the installer checks this).
 - outbound access to the official XTLS/Xray-core repository during the build.
 
 ## Install

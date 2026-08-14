@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
-	"strings"
 
 	"xnode-agent/internal/model"
 )
@@ -22,8 +22,15 @@ func Load(path string) (model.AgentConfig, error) {
 	if cfg.NodeID == "" || cfg.PanelURL == "" || cfg.PanelToken == "" {
 		return cfg, fmt.Errorf("node_id, panel_url and panel_token are required")
 	}
-	if !strings.HasPrefix(cfg.PanelURL, "https://") && !strings.HasPrefix(cfg.PanelURL, "http://127.0.0.1") && !strings.HasPrefix(cfg.PanelURL, "http://localhost") {
-		return cfg, fmt.Errorf("panel_url must use HTTPS unless it is loopback")
+	u, err := url.Parse(cfg.PanelURL)
+	if err != nil || u.Hostname() == "" {
+		return cfg, fmt.Errorf("invalid panel_url")
+	}
+	if u.Scheme != "https" {
+		host := u.Hostname()
+		if u.Scheme != "http" || (host != "127.0.0.1" && host != "localhost" && host != "::1") {
+			return cfg, fmt.Errorf("panel_url must use HTTPS unless it is loopback")
+		}
 	}
 	if cfg.SyncSeconds <= 0 {
 		cfg.SyncSeconds = 15

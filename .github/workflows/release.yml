@@ -3,29 +3,63 @@ on:
   push:
     tags: ['v*']
 permissions:
-  contents: read
+  contents: write
 jobs:
-  agent-binaries:
+  build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
+        goarch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout xnode-agent
+        uses: actions/checkout@v4
+        with:
+          path: xnode
+      - name: Checkout official Xray pin
+        uses: actions/checkout@v4
+        with:
+          repository: XTLS/Xray-core
+          ref: v26.7.28
+          path: xray
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
-      - name: Build
+          go-version: '1.26.x'
+      - name: Overlay and test xnode limiter
+        run: |
+          cp xnode/patches/xray-v26.7.28/xnode_limiter.go.txt xray/app/dispatcher/xnode_limiter.go
+          cp xnode/patches/xray-v26.7.28/xnode_limiter_test.go.txt xray/app/dispatcher/xnode_limiter_test.go
+          python3 xnode/patches/xray-v26.7.28/patch_default.py xray/app/dispatcher/default.go
+          (cd xray && go test ./app/dispatcher)
+      - name: Build Linux binaries
         env:
-          GOOS: ${{ matrix.goos }}
+          GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: go build -trimpath -ldflags='-s -w' -o xnode-agent-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/xnode-agent
+        run: |
+          (cd xnode && go build -trimpath -ldflags='-s -w' -o ../xnode-agent ./cmd/xnode-agent)
+          (cd xray && go build -trimpath -ldflags='-s -w' -o ../xray-bin ./main)
+          mkdir -p dist
+          mv xnode-agent dist/xnode-agent
+          mv xray-bin dist/xray
+          cp xnode/VERSION dist/VERSION
+          tar -C dist -czf xnode-v${GITHUB_REF_NAME#v}-linux-${{ matrix.goarch }}.tar.gz xnode-agent xray VERSION
       - uses: actions/upload-artifact@v4
         with:
-          name: xnode-agent-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: xnode-agent-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: xnode-linux-${{ matrix.goarch }}
+          path: xnode-v*-linux-${{ matrix.goarch }}.tar.gz
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: xnode-linux-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz > SHA256SUMS
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS --generate-notes --verify-tag

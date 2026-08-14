@@ -3,10 +3,14 @@ on:
   push:
     paths:
       - 'patches/xray-v26.7.28/**'
+      - 'internal/xray/**'
+      - 'internal/limits/**'
       - '.github/workflows/xray-patch.yml'
   pull_request:
     paths:
       - 'patches/xray-v26.7.28/**'
+      - 'internal/xray/**'
+      - 'internal/limits/**'
       - '.github/workflows/xray-patch.yml'
 permissions:
   contents: read
@@ -38,3 +42,11 @@ jobs:
       - name: Build Xray
         working-directory: xray
         run: go build -trimpath -o xray ./main
+      - name: Agent unit tests
+        working-directory: xnode
+        run: go test ./...
+      - name: End-to-end Xray API test
+        working-directory: xnode
+        env:
+          XRAY_BIN: ${{ github.workspace }}/xray/xray
+        run: go test ./internal/xray -run TestXrayE2ERuntime -count=1 -v

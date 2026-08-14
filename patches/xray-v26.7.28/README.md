@@ -6,7 +6,8 @@ It provides:
 
 - aggregate upload/download byte-rate limiting across all connections for a synthetic Xray email;
 - exact concurrent dispatcher admission counting;
-- live block enforcement for suspend/quota/expiration/IP/device decisions;
+- exact active source-IP admission with per-IP refcounts;
+- live block enforcement for suspend/quota/expiration/device decisions;
 - session-generation disconnect;
 - deleted-credential tombstone enforcement;
 - live atomic policy reload without restarting Xray.
@@ -20,7 +21,7 @@ Build manually:
 sudo install -m 0755 /tmp/xnode-xray-build/xray /usr/local/bin/xray
 ```
 
-Xray v26.7.28 declares Go 1.26, so use Go 1.26+ for this build. CI overlays the files onto the official XTLS/Xray-core tag, runs `go test ./app/dispatcher`, then builds `./main`.
+Xray v26.7.28 declares Go 1.26, so use Go 1.26+ for this build. CI overlays the files onto the official XTLS/Xray-core tag, runs `go test ./app/dispatcher`, builds `./main`, then the repository end-to-end job starts that Xray binary and exercises its runtime API.
 
 Runtime contract:
 
