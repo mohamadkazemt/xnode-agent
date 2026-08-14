@@ -1,5 +1,7 @@
 # Traffic delivery and billing durability
 
+[English](TRAFFIC_DELIVERY.md) | [فارسی](fa/TRAFFIC_DELIVERY.md)
+
 Xray user counters are read with reset enabled so each report is a delta. A network failure after resetting counters must not silently lose billing data.
 
 ## v0.3 flow
@@ -39,3 +41,4 @@ This covers the ambiguous case where the panel commits a batch but the HTTP resp
 ## Crash window
 
 There is still a very small unavoidable window between Xray atomically returning/resetting its counters and the agent writing the batch to disk. Eliminating even that window would require an acknowledgement-aware accounting API inside the core. The v0.3 spool primarily eliminates the much larger and common network-delivery loss mode.
+
