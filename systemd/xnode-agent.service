@@ -1,0 +1,15 @@
+[Unit]
+Description=XNode Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xnode-agent -config /etc/xnode/agent.json
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
