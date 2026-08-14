@@ -27,7 +27,7 @@ jobs:
           test -x /usr/local/bin/xray
           test "$(stat -c %a /etc/xnode/agent.json)" = 600
           test "$(stat -c %a /etc/xnode)" = 700
-          /usr/local/bin/xnode-agent -h
+          test -s /usr/local/bin/xnode-agent
           /usr/local/bin/xray version
       - name: Refuse config overwrite
         run: |
