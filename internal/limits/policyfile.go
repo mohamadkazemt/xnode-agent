@@ -15,6 +15,7 @@ import (
 type CorePolicyFile struct {
 	Version     int                   `json:"version"`
 	GeneratedAt int64                 `json:"generated_at"`
+	Mode        string                `json:"mode,omitempty"`
 	Users       map[string]CorePolicy `json:"users"`
 }
 
@@ -37,7 +38,11 @@ func WriteCorePolicy(path string, state model.DesiredState, now time.Time) error
 	if path == "" {
 		return nil
 	}
-	doc := CorePolicyFile{Version: 1, GeneratedAt: now.Unix(), Users: map[string]CorePolicy{}}
+	mode := state.Mode
+	if mode == "" {
+		mode = "active"
+	}
+	doc := CorePolicyFile{Version: 1, GeneratedAt: now.Unix(), Mode: mode, Users: map[string]CorePolicy{}}
 	// Keep every current authenticated identity in the policy document, even
 	// when it is unlimited. This lets a later desired-state deletion become a
 	// temporary blocked tombstone so already-established sessions are closed.
