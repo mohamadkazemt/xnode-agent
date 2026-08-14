@@ -1,0 +1,45 @@
+
+name: installer
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl python3 shellcheck
+      - name: Static checks
+        run: |
+          bash -n scripts/install.sh scripts/uninstall.sh
+          shellcheck scripts/install.sh scripts/uninstall.sh
+      - name: Smoke install release without systemd
+        run: |
+          bash scripts/install.sh --version v1.0.1 --node-id ci-node \
+            --panel-url https://panel.example.com --panel-token CI_ONLY_TOKEN --force --no-start
+          test -x /usr/local/bin/xnode-agent
+          test -x /usr/local/bin/xray
+          test "$(stat -c %a /etc/xnode/agent.json)" = 600
+          test "$(stat -c %a /etc/xnode)" = 700
+          /usr/local/bin/xnode-agent -h
+          /usr/local/bin/xray version
+      - name: Refuse config overwrite
+        run: |
+          if bash scripts/install.sh --version v1.0.1 --node-id ci-node \
+            --panel-url https://panel.example.com --panel-token CI_ONLY_TOKEN --no-start; then
+            echo 'installer unexpectedly overwrote config' >&2
+            exit 1
+          fi
+      - name: Uninstall while preserving data
+        run: |
+          bash scripts/uninstall.sh
+          test ! -e /usr/local/bin/xnode-agent
+          test -e /etc/xnode/agent.json
+
