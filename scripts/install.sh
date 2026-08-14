@@ -15,6 +15,13 @@ for cmd in go git python3 systemctl install; do
   command -v "$cmd" >/dev/null || { echo "missing dependency: $cmd" >&2; exit 1; }
 done
 
+python3 - "$(go env GOVERSION)" <<'PYVER'
+import re,sys
+m=re.fullmatch(r"go(\d+)\.(\d+)(?:\.(\d+))?", sys.argv[1])
+if not m or (int(m.group(1)), int(m.group(2))) < (1, 26):
+    raise SystemExit(f"Go 1.26+ is required to build pinned Xray v26.7.28 (found {sys.argv[1]})")
+PYVER
+
 python3 - "$CONFIG_SOURCE" <<'PY'
 import json,sys
 p=sys.argv[1]

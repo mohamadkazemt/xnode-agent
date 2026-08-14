@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"xnode-agent/internal/model"
@@ -21,6 +22,7 @@ type CorePolicy struct {
 	UploadBPS         int64 `json:"upload_bps,omitempty"`
 	DownloadBPS       int64 `json:"download_bps,omitempty"`
 	ConnectionLimit   int   `json:"connection_limit,omitempty"`
+	IPLimit           int   `json:"ip_limit,omitempty"`
 	Blocked           bool  `json:"blocked,omitempty"`
 	TombstoneUntil    int64 `json:"tombstone_until,omitempty"`
 	SessionGeneration int64 `json:"session_generation,omitempty"`
@@ -41,8 +43,12 @@ func WriteCorePolicy(path string, state model.DesiredState, now time.Time) error
 	// temporary blocked tombstone so already-established sessions are closed.
 	for _, in := range state.Inbounds {
 		for _, u := range in.Users {
+			ipLimit := u.Limits.IPLimit
+			if strings.EqualFold(in.IPLimitMode, "off") {
+				ipLimit = 0
+			}
 			doc.Users[xray.AccountingEmail(u.ID, in.ID)] = CorePolicy{
-				UploadBPS: u.Limits.UploadBPS, DownloadBPS: u.Limits.DownloadBPS, ConnectionLimit: u.Limits.ConnectionLimit, Blocked: !u.Enabled, SessionGeneration: u.SessionGeneration,
+				UploadBPS: u.Limits.UploadBPS, DownloadBPS: u.Limits.DownloadBPS, ConnectionLimit: u.Limits.ConnectionLimit, IPLimit: ipLimit, Blocked: !u.Enabled, SessionGeneration: u.SessionGeneration,
 			}
 		}
 	}
@@ -62,7 +68,7 @@ func WriteCorePolicy(path string, state model.DesiredState, now time.Time) error
 				}
 				if p.TombstoneUntil > now.Unix() {
 					p.Blocked = true
-					p.UploadBPS, p.DownloadBPS, p.ConnectionLimit = 0, 0, 0
+					p.UploadBPS, p.DownloadBPS, p.ConnectionLimit, p.IPLimit = 0, 0, 0, 0
 					doc.Users[email] = p
 				}
 			}
@@ -103,7 +109,7 @@ func CorePolicyEmails(state model.DesiredState) []string {
 	var out []string
 	for _, in := range state.Inbounds {
 		for _, u := range in.Users {
-			if !u.Enabled || u.Limits.UploadBPS > 0 || u.Limits.DownloadBPS > 0 || u.Limits.ConnectionLimit > 0 {
+			if !u.Enabled || u.Limits.UploadBPS > 0 || u.Limits.DownloadBPS > 0 || u.Limits.ConnectionLimit > 0 || u.Limits.IPLimit > 0 {
 				out = append(out, xray.AccountingEmail(u.ID, in.ID))
 			}
 		}
@@ -128,7 +134,7 @@ func StrictPolicyEmailsFromFile(path string, now time.Time) []string {
 		if p.TombstoneUntil > 0 && p.TombstoneUntil <= now.Unix() {
 			continue
 		}
-		if p.Blocked || p.UploadBPS > 0 || p.DownloadBPS > 0 || p.ConnectionLimit > 0 {
+		if p.Blocked || p.UploadBPS > 0 || p.DownloadBPS > 0 || p.ConnectionLimit > 0 || p.IPLimit > 0 {
 			out = append(out, email)
 		}
 	}

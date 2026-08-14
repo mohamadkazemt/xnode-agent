@@ -445,9 +445,34 @@ func (a *Agent) loadState() (model.DesiredState, bool) {
 	return state, true
 }
 func (a *Agent) persistState(state model.DesiredState) error {
-	if err := os.MkdirAll(filepath.Dir(a.Cfg.StateFile), 0o700); err != nil {
+	dir := filepath.Dir(a.Cfg.StateFile)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	b, _ := json.MarshalIndent(state, "", "  ")
-	return os.WriteFile(a.Cfg.StateFile, b, 0o600)
+	b, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".xnode-state-*.json")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, a.Cfg.StateFile)
 }

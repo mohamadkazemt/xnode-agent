@@ -13,7 +13,7 @@ import (
 func TestWriteCorePolicy(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "limits.json")
-	st := model.DesiredState{Inbounds: []model.ManagedInbound{{ID: "101", Users: []model.ManagedUser{{ID: "25", Enabled: true, Limits: model.UserLimits{UploadBPS: 100, DownloadBPS: 200, ConnectionLimit: 3}}}}}}
+	st := model.DesiredState{Inbounds: []model.ManagedInbound{{ID: "101", Users: []model.ManagedUser{{ID: "25", Enabled: true, Limits: model.UserLimits{UploadBPS: 100, DownloadBPS: 200, ConnectionLimit: 3, IPLimit: 2}}}}}}
 	if err := WriteCorePolicy(p, st, time.Unix(10, 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestWriteCorePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := d.Users["u:25|i:101"]
-	if got.UploadBPS != 100 || got.DownloadBPS != 200 || got.ConnectionLimit != 3 {
+	if got.UploadBPS != 100 || got.DownloadBPS != 200 || got.ConnectionLimit != 3 || got.IPLimit != 2 {
 		t.Fatalf("got %#v", got)
 	}
 	info, _ := os.Stat(p)
@@ -81,5 +81,21 @@ func TestCorePolicyDropsExpiredTombstone(t *testing.T) {
 	_ = json.Unmarshal(b, &got)
 	if _, exists := got.Users["u:old|i:1"]; exists {
 		t.Fatalf("expired tombstone retained: %#v", got.Users)
+	}
+}
+
+func TestWriteCorePolicyDisablesIPLimitWhenInboundModeOff(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "limits.json")
+	st := model.DesiredState{Inbounds: []model.ManagedInbound{{ID: "101", IPLimitMode: "off", Users: []model.ManagedUser{{ID: "25", Enabled: true, Limits: model.UserLimits{IPLimit: 2}}}}}}
+	if err := WriteCorePolicy(p, st, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	var d CorePolicyFile
+	if err := json.Unmarshal(b, &d); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Users["u:25|i:101"].IPLimit; got != 0 {
+		t.Fatalf("ip limit=%d", got)
 	}
 }

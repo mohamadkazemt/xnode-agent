@@ -15,11 +15,12 @@ import (
 )
 
 type xnodePolicy struct {
-	UploadBPS       int64 `json:"upload_bps"`
-	DownloadBPS     int64 `json:"download_bps"`
-	ConnectionLimit int   `json:"connection_limit"`
-	Blocked         bool  `json:"blocked"`
-	TombstoneUntil   int64 `json:"tombstone_until"`
+	UploadBPS         int64 `json:"upload_bps"`
+	DownloadBPS       int64 `json:"download_bps"`
+	ConnectionLimit   int   `json:"connection_limit"`
+	IPLimit           int   `json:"ip_limit"`
+	Blocked           bool  `json:"blocked"`
+	TombstoneUntil    int64 `json:"tombstone_until"`
 	SessionGeneration int64 `json:"session_generation"`
 }
 
@@ -40,10 +41,12 @@ var xnodeLimiter = struct {
 	mtime       time.Time
 	policies    map[string]xnodePolicy
 	connections map[string]int
+	ips         map[string]map[string]int
 	buckets     map[string]*xnodeBucket
 }{
 	policies:    map[string]xnodePolicy{},
 	connections: map[string]int{},
+	ips:         map[string]map[string]int{},
 	buckets:     map[string]*xnodeBucket{},
 }
 
@@ -108,6 +111,14 @@ func xnodeEmail(ctx context.Context) string {
 	return in.User.Email
 }
 
+func xnodeSourceIP(ctx context.Context) string {
+	in := session.InboundFromContext(ctx)
+	if in == nil || !in.Source.IsValid() {
+		return ""
+	}
+	return in.Source.Address.String()
+}
+
 // xnodeAdmit is called at Dispatcher entry, after protocol authentication has
 // attached the MemoryUser to the session context. It therefore limits logical
 // dispatched connections rather than kernel sockets or source-IP guesses.
@@ -116,19 +127,35 @@ func xnodeAdmit(ctx context.Context) error {
 	if email == "" {
 		return nil
 	}
+	ip := xnodeSourceIP(ctx)
 	p := xnodePolicyFor(email)
 	if p.Blocked {
 		return fmt.Errorf("xnode: user blocked: %s", email)
 	}
+
 	xnodeLimiter.Lock()
 	active := xnodeLimiter.connections[email]
 	if p.ConnectionLimit > 0 && active >= p.ConnectionLimit {
 		xnodeLimiter.Unlock()
 		return fmt.Errorf("xnode: connection limit exceeded for %s", email)
 	}
+
+	var refs map[string]int
+	if ip != "" {
+		refs = xnodeLimiter.ips[email]
+		if refs == nil {
+			refs = map[string]int{}
+			xnodeLimiter.ips[email] = refs
+		}
+		if p.IPLimit > 0 && refs[ip] == 0 && len(refs) >= p.IPLimit {
+			xnodeLimiter.Unlock()
+			return fmt.Errorf("xnode: IP limit exceeded for %s", email)
+		}
+		refs[ip]++
+	}
 	// Count every authenticated dispatcher connection, even while the user is
-	// currently unlimited. This makes a connection limit applied later exact
-	// for already-active sessions and lets policy changes tear excess sessions.
+	// currently unlimited. This makes limits applied later aware of sessions
+	// that were already active before the policy changed.
 	xnodeLimiter.connections[email] = active + 1
 	xnodeLimiter.Unlock()
 
@@ -140,6 +167,18 @@ func xnodeAdmit(ctx context.Context) error {
 				delete(xnodeLimiter.connections, email)
 			} else {
 				xnodeLimiter.connections[email] = n - 1
+			}
+			if ip != "" {
+				if m := xnodeLimiter.ips[email]; m != nil {
+					if n := m[ip]; n <= 1 {
+						delete(m, ip)
+					} else {
+						m[ip] = n - 1
+					}
+					if len(m) == 0 {
+						delete(xnodeLimiter.ips, email)
+					}
+				}
 			}
 			xnodeLimiter.Unlock()
 		})
