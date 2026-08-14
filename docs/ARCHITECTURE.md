@@ -1,5 +1,7 @@
 # Architecture — v1.0
 
+[English](ARCHITECTURE.md) | [فارسی](fa/ARCHITECTURE.md)
+
 ```text
                          YOUR PANEL / CONTROL PLANE
                          users, nodes, assignment,
@@ -77,3 +79,4 @@ This is intentionally a narrow overlay rather than a fork of unrelated Xray subs
 A single node cannot safely decide global failover because it has no authoritative view of the other nodes or client endpoint distribution. The heartbeat therefore reports the fields the panel scheduler needs: health, region, group, tags, weight, mode, drain state, network rate and traffic threshold state.
 
 Within one Xray process, native routing/balancer JSON remains available through desired-state passthrough.
+
