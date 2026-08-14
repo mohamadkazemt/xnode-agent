@@ -1,5 +1,7 @@
 # Limit and session enforcement
 
+[English](LIMITS.md) | [فارسی](fa/LIMITS.md)
+
 ## Identity
 
 For managed client protocols the agent assigns each credential a deterministic Xray email:
@@ -92,3 +94,4 @@ It is not required when the bundled Xray dispatcher overlay is used.
 ## WireGuard peers
 
 For an inbound WireGuard peer the agent injects the same deterministic `email` and `level` fields used by other managed users. Xray's WireGuard server resolves a peer from its allowed source address, attaches that `MemoryUser` to the dispatcher session, and therefore participates in user traffic stats, online-IP tracking, per-user routing and the dispatcher limiter. Runtime peer membership is still applied by replacing the WireGuard inbound because the current Xray `adu` CLI does not extract WireGuard users.
+
