@@ -1,0 +1,43 @@
+name: apply-v1-bundle
+
+on:
+  push:
+    branches:
+      - agent/v1.0-production
+    paths:
+      - '.xnode-v1.part*'
+      - '.github/workflows/apply-v1-bundle.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: agent/v1.0-production
+          fetch-depth: 0
+
+      - name: Reconstruct and verify v1 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .xnode-v1.part00 .xnode-v1.part01 .xnode-v1.part02 .xnode-v1.part03 .xnode-v1.part04 .xnode-v1.part05 .xnode-v1.part06 | base64 -d > /tmp/xnode-v1.tar.gz
+          echo 'a07613c0df481e5271041370534b90598c87ab6c781984a3786755929016bf80  /tmp/xnode-v1.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/xnode-v1.tar.gz
+
+      - name: Remove transport files and publish tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .xnode-v1.bundle.b64
+          rm -f .xnode-v1.part00 .xnode-v1.part01 .xnode-v1.part02 .xnode-v1.part03 .xnode-v1.part04 .xnode-v1.part05 .xnode-v1.part06
+          rm -f .github/workflows/apply-v1-bundle.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'v1.0 production node layer'
+          git push origin HEAD:agent/v1.0-production
