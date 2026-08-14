@@ -8,6 +8,7 @@ It provides:
 - exact concurrent dispatcher admission counting;
 - exact active source-IP admission with per-IP refcounts;
 - live block enforcement for suspend/quota/expiration/device decisions;
+- true node drain admission: new authenticated dispatcher sessions are rejected while existing sessions keep running;
 - session-generation disconnect;
 - deleted-credential tombstone enforcement;
 - live atomic policy reload without restarting Xray.
