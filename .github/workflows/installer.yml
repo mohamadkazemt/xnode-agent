@@ -20,7 +20,14 @@ jobs:
           bash -n scripts/install.sh scripts/uninstall.sh
           shellcheck scripts/install.sh scripts/uninstall.sh
       - name: Smoke install release without systemd
-        run: bash scripts/install.sh --version v1.0.1 --node-id ci-node --panel-url https://panel.example.com --panel-token CI_ONLY_TOKEN --force --no-start
+        run: |
+          if ! output=$(bash scripts/install.sh --version v1.0.1 --node-id ci-node --panel-url https://panel.example.com --panel-token CI_ONLY_TOKEN --force --no-start 2>&1); then
+            output=${output//'%'/'%25'}
+            output=${output//$'\n'/'%0A'}
+            output=${output//$'\r'/'%0D'}
+            echo "::error title=Installer smoke failed::$output"
+            exit 1
+          fi
       - name: Verify installed files and permissions
         run: |
           test -x /usr/local/bin/xnode-agent
