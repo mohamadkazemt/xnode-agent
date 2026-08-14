@@ -6,31 +6,156 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	xnet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/protocol"
+	"github.com/xtls/xray-core/common/session"
 )
 
-func TestXnodePolicyReload(t *testing.T) {
+func xnodeResetForTest() {
+	xnodeLimiter.Lock()
+	xnodeLimiter.path = ""
+	xnodeLimiter.checkedAt = time.Time{}
+	xnodeLimiter.mtime = time.Time{}
+	xnodeLimiter.mode = "active"
+	xnodeLimiter.policies = map[string]xnodePolicy{}
+	xnodeLimiter.connections = map[string]int{}
+	xnodeLimiter.ips = map[string]map[string]int{}
+	xnodeLimiter.buckets = map[string]*xnodeBucket{}
+	xnodeLimiter.Unlock()
+}
+
+func xnodeWritePolicyForTest(t *testing.T, body string) string {
+	t.Helper()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "limits.json")
-	if err := os.WriteFile(p, []byte(`{"version":1,"users":{"u:1|i:2":{"upload_bps":1000,"download_bps":2000,"connection_limit":3,"ip_limit":2,"session_generation":9}}}`), 0600); err != nil {
+	if err := os.WriteFile(p, []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("XNODE_LIMITS_FILE", p)
-	xnodeLimiter.Lock()
-	xnodeLimiter.checkedAt = time.Time{}
-	xnodeLimiter.path = ""
-	xnodeLimiter.policies = map[string]xnodePolicy{}
-	xnodeLimiter.Unlock()
+	xnodeResetForTest()
+	return p
+}
+
+func xnodeUserContext(t *testing.T, email, ip string) (context.Context, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	in := &session.Inbound{User: &protocol.MemoryUser{Email: email}}
+	if ip != "" {
+		in.Source = xnet.TCPDestination(xnet.ParseAddress(ip), xnet.Port(12345))
+	}
+	return session.ContextWithInbound(ctx, in), cancel
+}
+
+func xnodeWaitReleased(t *testing.T, email string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		xnodeLimiter.Lock()
+		n := xnodeLimiter.connections[email]
+		xnodeLimiter.Unlock()
+		if n == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("connection for %s was not released", email)
+}
+
+func TestXnodePolicyReload(t *testing.T) {
+	xnodeWritePolicyForTest(t, `{"version":1,"mode":"active","users":{"u:1|i:2":{"upload_bps":1000,"download_bps":2000,"connection_limit":3,"ip_limit":2,"session_generation":9}}}`)
 	got := xnodePolicyFor("u:1|i:2")
 	if got.UploadBPS != 1000 || got.DownloadBPS != 2000 || got.ConnectionLimit != 3 || got.IPLimit != 2 || got.SessionGeneration != 9 {
 		t.Fatalf("got %#v", got)
+	}
+	if xnodeMode() != "active" {
+		t.Fatalf("mode=%q", xnodeMode())
+	}
+}
+
+func TestXnodeDrainRejectsNewAdmission(t *testing.T) {
+	xnodeWritePolicyForTest(t, `{"version":1,"mode":"draining","users":{}}`)
+	ctx, cancel := xnodeUserContext(t, "u:1|i:2", "203.0.113.1")
+	defer cancel()
+	if err := xnodeAdmit(ctx); err == nil {
+		t.Fatal("expected draining admission rejection")
+	}
+}
+
+func TestXnodeBlockedUserRejected(t *testing.T) {
+	xnodeWritePolicyForTest(t, `{"version":1,"users":{"u:1|i:2":{"blocked":true}}}`)
+	ctx, cancel := xnodeUserContext(t, "u:1|i:2", "203.0.113.1")
+	defer cancel()
+	if err := xnodeAdmit(ctx); err == nil {
+		t.Fatal("expected blocked user rejection")
+	}
+}
+
+func TestXnodeConnectionLimit(t *testing.T) {
+	email := "u:1|i:2"
+	xnodeWritePolicyForTest(t, `{"version":1,"users":{"u:1|i:2":{"connection_limit":1}}}`)
+	ctx1, cancel1 := xnodeUserContext(t, email, "203.0.113.1")
+	if err := xnodeAdmit(ctx1); err != nil {
+		t.Fatal(err)
+	}
+	ctx2, cancel2 := xnodeUserContext(t, email, "203.0.113.1")
+	defer cancel2()
+	if err := xnodeAdmit(ctx2); err == nil {
+		t.Fatal("expected connection limit rejection")
+	}
+	cancel1()
+	xnodeWaitReleased(t, email)
+	ctx3, cancel3 := xnodeUserContext(t, email, "203.0.113.1")
+	defer cancel3()
+	if err := xnodeAdmit(ctx3); err != nil {
+		t.Fatalf("admission after release: %v", err)
+	}
+}
+
+func TestXnodeIPLimitAllowsExistingIPAndRejectsNewIP(t *testing.T) {
+	email := "u:1|i:2"
+	xnodeWritePolicyForTest(t, `{"version":1,"users":{"u:1|i:2":{"ip_limit":1}}}`)
+	ctx1, cancel1 := xnodeUserContext(t, email, "203.0.113.1")
+	defer cancel1()
+	if err := xnodeAdmit(ctx1); err != nil {
+		t.Fatal(err)
+	}
+	ctx2, cancel2 := xnodeUserContext(t, email, "203.0.113.1")
+	defer cancel2()
+	if err := xnodeAdmit(ctx2); err != nil {
+		t.Fatalf("same IP should be allowed: %v", err)
+	}
+	ctx3, cancel3 := xnodeUserContext(t, email, "203.0.113.2")
+	defer cancel3()
+	if err := xnodeAdmit(ctx3); err == nil {
+		t.Fatal("expected second distinct IP rejection")
+	}
+}
+
+func TestXnodeSessionGenerationInvalidatesOldSession(t *testing.T) {
+	xnodeWritePolicyForTest(t, `{"version":1,"users":{"u:1|i:2":{"session_generation":9}}}`)
+	if err := xnodeWait(context.Background(), "u:1|i:2", 8, false, 1); err == nil {
+		t.Fatal("expected old session generation rejection")
+	}
+	if err := xnodeWait(context.Background(), "u:1|i:2", 9, false, 1); err != nil {
+		t.Fatalf("current session generation: %v", err)
+	}
+}
+
+func TestXnodeAggregateRateWaits(t *testing.T) {
+	xnodeWritePolicyForTest(t, `{"version":1,"users":{"u:1|i:2":{"upload_bps":1000}}}`)
+	start := time.Now()
+	if err := xnodeWait(context.Background(), "u:1|i:2", 0, false, 40); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed < 25*time.Millisecond {
+		t.Fatalf("rate limiter returned too early: %v", elapsed)
 	}
 }
 
 func TestXnodeWaitUnlimited(t *testing.T) {
 	t.Setenv("XNODE_LIMITS_FILE", "")
-	xnodeLimiter.Lock()
-	xnodeLimiter.checkedAt = time.Time{}
-	xnodeLimiter.Unlock()
+	xnodeResetForTest()
 	if err := xnodeWait(context.Background(), "u:1|i:2", 0, false, 1024); err != nil {
 		t.Fatal(err)
 	}
