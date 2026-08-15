@@ -260,5 +260,7 @@ trap - ERR INT TERM
 log "installed xnode-agent $VERSION ($ARCH)"
 [[ $NO_START -eq 1 ]] && log "service files installed but service was not started"
 log "status: curl -fsS http://127.0.0.1:19090/status"
-[[ -x $MENU_PATH ]] && log "management: sudo xnode"
+if [[ -x $MENU_PATH ]]; then
+  log "management: sudo xnode"
+fi
 
