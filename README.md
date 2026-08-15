@@ -1,4 +1,4 @@
-# xnode-agent v1.0.0
+# xnode-agent v1.0.2
 
 [English](README.md) | [فارسی](README.fa.md)
 
@@ -110,4 +110,3 @@ The exact JSON contract and retry/idempotency rules are in `docs/PANEL_API.md` a
 ## Xray pin
 
 v1.0 maintains its dispatcher overlay against **Xray v26.7.28**. Upgrade the pin only with a new patch directory and a green `xray-patch` workflow; do not silently point the existing overlay at another Xray revision.
-

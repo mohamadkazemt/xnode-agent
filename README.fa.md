@@ -1,6 +1,6 @@
 <div dir="rtl">
 
-# راهنمای فارسی xnode-agent نسخه ۱.۰
+# راهنمای فارسی xnode-agent نسخه ۱.۰.۲
 
 [English](README.md) | [فارسی](README.fa.md)
 
@@ -279,4 +279,3 @@ sudo /usr/local/bin/xnode-agent -config /etc/xnode/agent.json
 - [رفتار API زمان اجرای Xray](docs/fa/RUNTIME_API.md)
 
 </div>
-
