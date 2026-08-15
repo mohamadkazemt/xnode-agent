@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/mohamadkazemt/xnode-agent/main/scri
 To install a prepared config or pin a release:
 
 ```bash
-sudo bash scripts/install.sh --config ./agent.json --version v1.0.1
+sudo bash scripts/install.sh --config ./agent.json --version v1.1.0
 ```
 
 Supported options are `--node-id`, `--panel-url`, `--panel-token`, `--config`,
@@ -44,6 +44,9 @@ against `SHA256SUMS`, and installs:
 ```text
 /usr/local/bin/xnode-agent
 /usr/local/bin/xray
+/usr/local/bin/xnode                   (management menu in v1.1.0+)
+/usr/local/lib/xnode/uninstall.sh
+/usr/local/lib/xnode/VERSION
 /etc/xnode/agent.json             (0600)
 /etc/systemd/system/xnode-agent.service
 /etc/logrotate.d/xnode
@@ -54,6 +57,15 @@ against `SHA256SUMS`, and installs:
 Configuration and data directories are mode `0700`. If file installation,
 service startup, or the local health check fails, previous managed files are
 restored and the failed installation is removed.
+
+After installation, open the bilingual management menu with:
+
+```bash
+sudo xnode
+```
+
+See [XNode server management](MANAGEMENT.md) for commands, safe configuration
+editing, diagnostics, upgrades, backups and removal.
 
 ## Verify
 

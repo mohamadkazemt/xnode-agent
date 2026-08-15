@@ -5,6 +5,10 @@ readonly REPO="mohamadkazemt/xnode-agent"
 readonly CONFIG_PATH="/etc/xnode/agent.json"
 readonly SERVICE_PATH="/etc/systemd/system/xnode-agent.service"
 readonly LOGROTATE_PATH="/etc/logrotate.d/xnode"
+readonly MENU_PATH="/usr/local/bin/xnode"
+readonly LIB_DIR="/usr/local/lib/xnode"
+readonly UNINSTALL_PATH="$LIB_DIR/uninstall.sh"
+readonly VERSION_PATH="$LIB_DIR/VERSION"
 
 VERSION=""
 CONFIG_SOURCE=""
@@ -27,7 +31,7 @@ Usage: install.sh [options]
   --panel-url URL       Panel URL (prompted when omitted)
   --panel-token TOKEN   Per-node token (prompted securely when omitted)
   --config FILE         Install an existing JSON config
-  --version VERSION     Install a release (for example v1.0.1); default: latest
+  --version VERSION     Install a release (for example v1.1.0); default: latest
   --force               Replace an existing config
   --no-start            Do not start the service (CI/images without systemd)
   -h, --help            Show this help
@@ -35,7 +39,7 @@ Usage: install.sh [options]
 Examples:
   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/mohamadkazemt/xnode-agent/main/scripts/install.sh)"
   sudo bash install.sh --node-id node-1 --panel-url https://panel.example.com --panel-token 'TOKEN'
-  sudo bash install.sh --config ./agent.json --version v1.0.1
+  sudo bash install.sh --config ./agent.json --version v1.1.0
 EOF
 }
 
@@ -92,10 +96,11 @@ rollback() {
   if command -v systemctl >/dev/null && [[ $NO_START -eq 0 ]]; then
     systemctl stop xnode-agent.service >/dev/null 2>&1 || true
   fi
-  for path in /usr/local/bin/xnode-agent /usr/local/bin/xray "$CONFIG_PATH" "$SERVICE_PATH" "$LOGROTATE_PATH"; do
+  for path in /usr/local/bin/xnode-agent /usr/local/bin/xray "$MENU_PATH" "$UNINSTALL_PATH" "$VERSION_PATH" "$CONFIG_PATH" "$SERVICE_PATH" "$LOGROTATE_PATH"; do
     local name=${path#/}; name=${name//\//__}
     if [[ -e "$BACKUP_DIR/$name" ]]; then cp -a "$BACKUP_DIR/$name" "$path"; else rm -f "$path"; fi
   done
+  rmdir "$LIB_DIR" >/dev/null 2>&1 || true
   if command -v systemctl >/dev/null; then systemctl daemon-reload >/dev/null 2>&1 || true; fi
   exit "$status"
 }
@@ -174,11 +179,24 @@ if not u.hostname or (u.scheme != "https" and not (u.scheme == "http" and u.host
     raise SystemExit("panel_url must use HTTPS unless it is loopback")
 PY
 
-for path in /usr/local/bin/xnode-agent /usr/local/bin/xray "$CONFIG_PATH" "$SERVICE_PATH" "$LOGROTATE_PATH"; do backup_path "$path"; done
+for path in /usr/local/bin/xnode-agent /usr/local/bin/xray "$MENU_PATH" "$UNINSTALL_PATH" "$VERSION_PATH" "$CONFIG_PATH" "$SERVICE_PATH" "$LOGROTATE_PATH"; do backup_path "$path"; done
 install -d -m 0700 /etc/xnode /var/lib/xnode /var/lib/xnode/traffic-spool /var/log/xnode
 install -m 0755 "$TMP_DIR/extract/xnode-agent" /usr/local/bin/xnode-agent
 install -m 0755 "$TMP_DIR/extract/xray" /usr/local/bin/xray
 install -m 0600 "$TMP_DIR/agent.json" "$CONFIG_PATH"
+if [[ -f "$TMP_DIR/extract/xnode" && -f "$TMP_DIR/extract/xnode-uninstall" ]]; then
+  install -d -m 0755 "$LIB_DIR"
+  install -m 0755 "$TMP_DIR/extract/xnode" "$MENU_PATH"
+  install -m 0700 "$TMP_DIR/extract/xnode-uninstall" "$UNINSTALL_PATH"
+  if [[ -f "$TMP_DIR/extract/VERSION" ]]; then
+    install -m 0644 "$TMP_DIR/extract/VERSION" "$VERSION_PATH"
+  else
+    printf '%s\n' "${VERSION#v}" >"$VERSION_PATH"
+    chmod 0644 "$VERSION_PATH"
+  fi
+else
+  log "management menu is not bundled in $VERSION; skipping /usr/local/bin/xnode"
+fi
 
 cat >"$TMP_DIR/xnode-agent.service" <<'EOF'
 [Unit]
@@ -242,4 +260,7 @@ trap - ERR INT TERM
 log "installed xnode-agent $VERSION ($ARCH)"
 [[ $NO_START -eq 1 ]] && log "service files installed but service was not started"
 log "status: curl -fsS http://127.0.0.1:19090/status"
+if [[ -x $MENU_PATH ]]; then
+  log "management: sudo xnode"
+fi
 

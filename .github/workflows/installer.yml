@@ -17,8 +17,12 @@ jobs:
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl python3 shellcheck
       - name: Static checks
         run: |
-          bash -n scripts/install.sh scripts/uninstall.sh
-          shellcheck scripts/install.sh scripts/uninstall.sh
+          bash -n scripts/install.sh scripts/uninstall.sh scripts/xnode
+          shellcheck scripts/install.sh scripts/uninstall.sh scripts/xnode
+      - name: Management menu smoke test
+        run: |
+          bash scripts/xnode help
+          test "$(printf '0\n' | XNODE_ALLOW_NO_SYSTEMD=1 bash scripts/xnode | grep -c 'XNode Agent Management')" -eq 1
       - name: Smoke install release without systemd
         shell: bash
         run: |
@@ -36,6 +40,26 @@ jobs:
           test "$(stat -c %a /etc/xnode/agent.json)" = 600
           test "$(stat -c %a /etc/xnode)" = 700
           test -s /usr/local/bin/xnode-agent
+      - name: Exercise settings redaction and safe config editor
+        shell: bash
+        run: |
+          menu_tmp=$(mktemp -d)
+          trap 'rm -rf "$menu_tmp"' EXIT
+          cp /etc/xnode/agent.json "$menu_tmp/agent.json"
+          chmod 0600 "$menu_tmp/agent.json"
+          settings=$(XNODE_CONFIG_PATH="$menu_tmp/agent.json" bash scripts/xnode settings)
+          grep -F 'panel_token: configured (redacted)' <<<"$settings"
+          if grep -F 'CI_ONLY_TOKEN' <<<"$settings"; then
+            echo 'management command exposed the panel token' >&2
+            exit 1
+          fi
+          printf '\n\n\n5\n' | XNODE_CONFIG_PATH="$menu_tmp/agent.json" bash scripts/xnode configure
+          python3 - "$menu_tmp/agent.json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as handle: data=json.load(handle)
+          assert data["sync_seconds"] == 5
+          assert data["panel_token"] == "CI_ONLY_TOKEN"
+          PY
       - name: Verify patched Xray binary
         run: |
           /usr/local/bin/xray version

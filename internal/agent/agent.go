@@ -23,7 +23,7 @@ import (
 	"xnode-agent/internal/xray"
 )
 
-const Version = "1.0.2"
+const Version = "1.1.0"
 
 type Agent struct {
 	Cfg      model.AgentConfig

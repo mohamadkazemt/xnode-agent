@@ -1,0 +1,627 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly REPO="mohamadkazemt/xnode-agent"
+readonly SERVICE_NAME="${XNODE_SERVICE_NAME:-xnode-agent.service}"
+readonly CONFIG_PATH="${XNODE_CONFIG_PATH:-/etc/xnode/agent.json}"
+readonly LIB_DIR="${XNODE_LIB_DIR:-/usr/local/lib/xnode}"
+readonly BACKUP_ROOT="${XNODE_BACKUP_ROOT:-/var/backups/xnode}"
+readonly ACCESS_LOG="${XNODE_ACCESS_LOG:-/var/log/xnode/xray-access.log}"
+
+if [[ -t 1 && ${NO_COLOR:-} == "" ]]; then
+  readonly GREEN=$'\033[32m' RED=$'\033[31m' YELLOW=$'\033[33m' RESET=$'\033[0m'
+else
+  readonly GREEN="" RED="" YELLOW="" RESET=""
+fi
+
+say() { printf '%s\n' "$*"; }
+info() { printf '%s[xnode]%s %s\n' "$GREEN" "$RESET" "$*"; }
+warn() { printf '%s[xnode]%s %s\n' "$YELLOW" "$RESET" "$*" >&2; }
+die() { printf '%s[xnode] error:%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+XNode management / مدیریت نود
+
+Usage: xnode [command] [options]
+
+Commands:
+  menu                       Interactive bilingual menu (default)
+  status                     Service, Xray and runtime summary
+  start | stop | restart     Manage the agent and its Xray child process
+  logs [--follow]            Agent journal (last 100 lines by default)
+  xray-logs [--follow]       Xray access log
+  settings                   Show connection settings with token redacted
+  configure                  Safely edit node ID, panel URL, token and interval
+  test-panel                 Test authenticated desired-state request
+  doctor                     Run local and panel diagnostics
+  update [VERSION]           Install latest release or a specific version
+  backup                     Back up configuration and state
+  backups                    List available backups
+  uninstall [--purge]        Remove XNode; purge also removes config/data/logs
+  version                    Show installed component versions
+  help                       Show this help
+
+Examples:
+  sudo xnode
+  sudo xnode doctor
+  sudo xnode update
+  sudo xnode update v1.0.2
+EOF
+}
+
+require_root() {
+  if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    return
+  fi
+  if command -v sudo >/dev/null; then
+    exec sudo -- "$0" "$@"
+  fi
+  die "run as root (for example: sudo xnode)"
+}
+
+require_systemd() {
+  command -v systemctl >/dev/null || die "systemctl is not installed"
+  [[ -d /run/systemd/system || ${XNODE_ALLOW_NO_SYSTEMD:-0} == 1 ]] || die "systemd is not running"
+}
+
+download() {
+  local url=$1 destination=$2
+  if command -v curl >/dev/null; then
+    curl -fL --retry 3 --connect-timeout 15 -o "$destination" "$url"
+  elif command -v wget >/dev/null; then
+    wget -q --tries=3 -O "$destination" "$url"
+  else
+    die "curl or wget is required"
+  fi
+}
+
+status_base_url() {
+  python3 - "$CONFIG_PATH" <<'PY'
+import ipaddress, json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        listen = json.load(handle).get("listen") or "127.0.0.1:19090"
+    if listen.startswith("["):
+        host, port = listen[1:].split("]:", 1)
+    else:
+        host, port = listen.rsplit(":", 1)
+    loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+    if not loopback or not port.isdigit():
+        raise ValueError
+    print(f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}")
+except Exception:
+    print("http://127.0.0.1:19090")
+PY
+}
+
+http_get() {
+  local url=$1
+  if command -v curl >/dev/null; then
+    curl -fsS --max-time 5 "$url"
+  elif command -v wget >/dev/null; then
+    wget -q --timeout=5 -O - "$url"
+  else
+    return 127
+  fi
+}
+
+service_state() {
+  if command -v systemctl >/dev/null && systemctl is-active --quiet "$SERVICE_NAME"; then
+    printf '%sRunning%s' "$GREEN" "$RESET"
+  else
+    printf '%sStopped%s' "$RED" "$RESET"
+  fi
+}
+
+autostart_state() {
+  if command -v systemctl >/dev/null && systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+    printf '%sYes%s' "$GREEN" "$RESET"
+  else
+    printf '%sNo%s' "$YELLOW" "$RESET"
+  fi
+}
+
+xray_state() {
+  local base snapshot
+  base=$(status_base_url)
+  if snapshot=$(http_get "$base/status" 2>/dev/null); then
+    if SNAPSHOT=$snapshot python3 - <<'PY'
+import json, os, sys
+try:
+    sys.exit(0 if json.loads(os.environ["SNAPSHOT"]).get("xray_running") else 1)
+except Exception:
+    sys.exit(1)
+PY
+    then
+      printf '%sRunning%s' "$GREEN" "$RESET"
+      return
+    fi
+  fi
+  printf '%sStopped/unknown%s' "$RED" "$RESET"
+}
+
+installed_version() {
+  if [[ -r "$LIB_DIR/VERSION" ]]; then
+    tr -d '\r\n' <"$LIB_DIR/VERSION"
+  else
+    printf 'unknown'
+  fi
+}
+
+print_header() {
+  local os_name="unknown"
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    os_name=${PRETTY_NAME:-${ID:-unknown}}
+  fi
+  cat <<EOF
+
+╔════════════════════════════════════════════════════╗
+│  XNode Agent Management / مدیریت نود              │
+╚════════════════════════════════════════════════════╝
+OS / سیستم‌عامل: $os_name
+Agent: $(service_state)    Autostart: $(autostart_state)    Xray: $(xray_state)
+Installed version / نسخه: $(installed_version)
+EOF
+}
+
+show_status() {
+  local base snapshot
+  print_header
+  base=$(status_base_url)
+  if ! snapshot=$(http_get "$base/status" 2>/dev/null); then
+    warn "local status endpoint is unavailable: $base/status"
+    return 1
+  fi
+  SNAPSHOT=$snapshot python3 - <<'PY'
+import json, os
+d = json.loads(os.environ["SNAPSHOT"])
+mem = float(d.get("memory_bytes") or 0)
+units = ["B", "KiB", "MiB", "GiB", "TiB"]
+unit = units[0]
+for unit in units:
+    if mem < 1024 or unit == units[-1]: break
+    mem /= 1024
+print()
+print("Runtime / وضعیت اجرا")
+print(f"  Node ID:              {d.get('node_id') or '-'}")
+print(f"  Agent version:        {d.get('agent_version') or '-'}")
+print(f"  Xray version:         {d.get('xray_version') or '-'}")
+print(f"  Healthy:              {d.get('healthy', False)}")
+print(f"  Xray API healthy:     {d.get('xray_api_healthy', False)}")
+print(f"  Strict limits ready:  {d.get('strict_limits_ready', False)}")
+print(f"  Mode:                 {d.get('mode') or '-'}")
+print(f"  State version:        {d.get('state_version') or '-'}")
+print(f"  Online users:         {d.get('online_users') or 0}")
+print(f"  Tracked IPs:          {d.get('tracked_ips') or 0}")
+print(f"  CPU:                  {float(d.get('cpu_percent') or 0):.1f}%")
+print(f"  Agent memory:         {mem:.1f} {unit}")
+print(f"  Load (1m):            {float(d.get('load1') or 0):.2f}")
+message = d.get("message")
+if message:
+    print(f"  Message:              {message}")
+PY
+}
+
+show_settings() {
+  [[ -r "$CONFIG_PATH" ]] || die "configuration not found: $CONFIG_PATH"
+  python3 - "$CONFIG_PATH" <<'PY'
+import json, os, stat, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    d = json.load(handle)
+token = d.get("panel_token")
+safe = dict(d)
+safe["panel_token"] = "configured (redacted)" if token else "missing"
+print(f"Config: {path}")
+print(f"Permissions: {stat.S_IMODE(os.stat(path).st_mode):04o}")
+for key in ("node_id", "panel_url", "panel_token", "sync_seconds", "xray_binary",
+            "xray_config", "xray_api", "listen", "report_sessions",
+            "require_patched_core", "weight"):
+    print(f"{key}: {safe.get(key, '-')}")
+PY
+}
+
+wait_for_health() {
+  local base
+  base=$(status_base_url)
+  for _ in {1..20}; do
+    if http_get "$base/healthz" >/dev/null 2>&1; then
+      info "health check passed"
+      return 0
+    fi
+    sleep 1
+  done
+  warn "health check failed: $base/healthz"
+  return 1
+}
+
+service_action() {
+  local action=$1
+  require_root "$action"
+  require_systemd
+  case "$action" in
+    start)
+      systemctl enable --now "$SERVICE_NAME"
+      wait_for_health
+      ;;
+    stop)
+      systemctl stop "$SERVICE_NAME"
+      ;;
+    restart)
+      systemctl restart "$SERVICE_NAME"
+      wait_for_health
+      ;;
+    *) die "unsupported service action: $action" ;;
+  esac
+  systemctl is-active "$SERVICE_NAME" 2>/dev/null || true
+}
+
+show_logs() {
+  local follow=${1:-0}
+  require_root logs
+  command -v journalctl >/dev/null || die "journalctl is not installed"
+  if [[ $follow == 1 ]]; then
+    journalctl -u "$SERVICE_NAME" -f
+  else
+    journalctl -u "$SERVICE_NAME" -n 100 --no-pager
+  fi
+}
+
+show_xray_logs() {
+  local follow=${1:-0}
+  require_root xray-logs
+  [[ -e "$ACCESS_LOG" ]] || die "Xray access log not found: $ACCESS_LOG"
+  if [[ $follow == 1 ]]; then
+    tail -n 100 -f "$ACCESS_LOG"
+  else
+    tail -n 100 "$ACCESS_LOG"
+  fi
+}
+
+configure() {
+  local current_node current_panel current_sync node_id panel_url panel_token sync_seconds
+  local backup temp_file
+  local -a current
+  require_root configure
+  [[ -f "$CONFIG_PATH" ]] || die "configuration not found: $CONFIG_PATH"
+  command -v python3 >/dev/null || die "python3 is required"
+
+  mapfile -t current < <(python3 - "$CONFIG_PATH" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle: d=json.load(handle)
+print(d.get("node_id", ""))
+print(d.get("panel_url", ""))
+print(d.get("sync_seconds", 15))
+PY
+  )
+  current_node=${current[0]:-}
+  current_panel=${current[1]:-}
+  current_sync=${current[2]:-15}
+
+  printf 'Node ID [%s]: ' "$current_node"; IFS= read -r node_id
+  printf 'Panel URL [%s]: ' "$current_panel"; IFS= read -r panel_url
+  printf 'Panel token [press Enter to keep current]: '; IFS= read -r -s panel_token; printf '\n'
+  printf 'Sync seconds [%s]: ' "$current_sync"; IFS= read -r sync_seconds
+  node_id=${node_id:-$current_node}
+  panel_url=${panel_url:-$current_panel}
+  sync_seconds=${sync_seconds:-$current_sync}
+
+  temp_file=$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")
+  if ! XNODE_NEW_NODE_ID=$node_id XNODE_NEW_PANEL_URL=$panel_url \
+    XNODE_NEW_PANEL_TOKEN=$panel_token XNODE_NEW_SYNC_SECONDS=$sync_seconds \
+    python3 - "$CONFIG_PATH" "$temp_file" <<'PY'
+import json, os, sys, urllib.parse
+source, target = sys.argv[1:]
+with open(source, encoding="utf-8") as handle: d=json.load(handle)
+node_id = os.environ["XNODE_NEW_NODE_ID"].strip()
+panel_url = os.environ["XNODE_NEW_PANEL_URL"].strip().rstrip("/")
+token = os.environ["XNODE_NEW_PANEL_TOKEN"]
+try: sync_seconds = int(os.environ["XNODE_NEW_SYNC_SECONDS"])
+except ValueError: raise SystemExit("sync_seconds must be a number")
+if not node_id: raise SystemExit("node_id cannot be empty")
+u = urllib.parse.urlparse(panel_url)
+if not u.hostname or (u.scheme != "https" and not (u.scheme == "http" and u.hostname in {"127.0.0.1", "localhost", "::1"})):
+    raise SystemExit("panel_url must use HTTPS unless it is loopback")
+if not 1 <= sync_seconds <= 3600: raise SystemExit("sync_seconds must be between 1 and 3600")
+d["node_id"], d["panel_url"], d["sync_seconds"] = node_id, panel_url, sync_seconds
+if token: d["panel_token"] = token
+if not isinstance(d.get("panel_token"), str) or not d["panel_token"].strip():
+    raise SystemExit("panel_token cannot be empty")
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(d, handle, indent=2, ensure_ascii=False)
+    handle.write("\n")
+PY
+  then
+    rm -f "$temp_file"
+    return 1
+  fi
+
+  backup="${CONFIG_PATH}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+  cp -p "$CONFIG_PATH" "$backup"
+  chmod 0600 "$backup"
+  install -m 0600 "$temp_file" "$CONFIG_PATH"
+  rm -f "$temp_file"
+
+  if command -v systemctl >/dev/null && systemctl is-active --quiet "$SERVICE_NAME"; then
+    if ! systemctl restart "$SERVICE_NAME" || ! wait_for_health; then
+      warn "restoring previous configuration"
+      install -m 0600 "$backup" "$CONFIG_PATH"
+      systemctl restart "$SERVICE_NAME" || true
+      die "new configuration failed health check and was rolled back"
+    fi
+  fi
+  info "configuration updated; backup: $backup"
+}
+
+test_panel() {
+  require_root test-panel
+  [[ -r "$CONFIG_PATH" ]] || die "configuration not found: $CONFIG_PATH"
+  python3 - "$CONFIG_PATH" <<'PY'
+import json, ssl, sys, urllib.error, urllib.parse, urllib.request
+with open(sys.argv[1], encoding="utf-8") as handle: d=json.load(handle)
+node_id, base, token = d.get("node_id"), d.get("panel_url", "").rstrip("/"), d.get("panel_token")
+if not node_id or not base or not token: raise SystemExit("node_id, panel_url and panel_token are required")
+url = f"{base}/api/v1/nodes/{urllib.parse.quote(node_id, safe='')}/desired-state"
+request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+try:
+    with urllib.request.urlopen(request, timeout=15, context=ssl.create_default_context()) as response:
+        body = response.read(4096)
+        print(f"Panel connection: OK (HTTP {response.status})")
+        try:
+            payload = json.loads(body)
+            print(f"Desired state version: {payload.get('version', '-')}")
+            print(f"Node enabled: {payload.get('enabled', '-')}")
+            print(f"Node mode: {payload.get('mode', '-')}")
+        except Exception:
+            print("Response received but was not valid desired-state JSON")
+except urllib.error.HTTPError as exc:
+    body = exc.read(512).decode("utf-8", "replace").replace("\n", " ")
+    print(f"Panel connection failed: HTTP {exc.code}", file=sys.stderr)
+    if body: print(f"Response: {body}", file=sys.stderr)
+    raise SystemExit(1)
+except Exception as exc:
+    print(f"Panel connection failed: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+doctor() {
+  local failed=0 base mode
+  require_root doctor
+  say "XNode diagnostics / عیب‌یابی"
+  for command_name in python3 systemctl; do
+    if command -v "$command_name" >/dev/null; then
+      printf '  [OK] %s\n' "$command_name"
+    else
+      printf '  [FAIL] missing %s\n' "$command_name"
+      failed=1
+    fi
+  done
+  for path in "$CONFIG_PATH" /usr/local/bin/xnode-agent /usr/local/bin/xray; do
+    if [[ -e "$path" ]]; then
+      printf '  [OK] %s\n' "$path"
+    else
+      printf '  [FAIL] missing %s\n' "$path"
+      failed=1
+    fi
+  done
+  if [[ -f "$CONFIG_PATH" ]]; then
+    if python3 -m json.tool "$CONFIG_PATH" >/dev/null 2>&1; then
+      printf '  [OK] configuration JSON\n'
+    else
+      printf '  [FAIL] invalid configuration JSON\n'
+      failed=1
+    fi
+    mode=$(stat -c '%a' "$CONFIG_PATH" 2>/dev/null || stat -f '%Lp' "$CONFIG_PATH" 2>/dev/null || printf '?')
+    if [[ $mode == 600 ]]; then
+      printf '  [OK] configuration permissions (0600)\n'
+    else
+      printf '  [FAIL] configuration permissions are %s, expected 600\n' "$mode"
+      failed=1
+    fi
+  fi
+  if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    printf '  [OK] systemd service active\n'
+  else
+    printf '  [FAIL] systemd service inactive\n'
+    failed=1
+  fi
+  base=$(status_base_url)
+  if http_get "$base/healthz" >/dev/null 2>&1; then
+    printf '  [OK] local health endpoint\n'
+  else
+    printf '  [FAIL] local health endpoint\n'
+    failed=1
+  fi
+  if http_get "$base/readyz" >/dev/null 2>&1; then
+    printf '  [OK] local readiness endpoint\n'
+  else
+    printf '  [FAIL] local readiness endpoint\n'
+    failed=1
+  fi
+  if test_panel; then
+    printf '  [OK] authenticated panel request\n'
+  else
+    printf '  [FAIL] authenticated panel request\n'
+    failed=1
+  fi
+  if [[ $failed -eq 0 ]]; then
+    info "all diagnostics passed"
+  else
+    warn "one or more diagnostics failed"
+  fi
+  return "$failed"
+}
+
+update_agent() {
+  local version=${1:-} temp_dir installer
+  local status=0
+  local -a args
+  require_root update "${version:-}"
+  [[ -f "$CONFIG_PATH" ]] || die "configuration not found: $CONFIG_PATH"
+  temp_dir=$(mktemp -d)
+  installer="$temp_dir/install.sh"
+  info "downloading trusted installer"
+  if ! download "https://raw.githubusercontent.com/$REPO/main/scripts/install.sh" "$installer"; then
+    rm -rf "$temp_dir"
+    return 1
+  fi
+  chmod 0700 "$installer"
+  args=(--config "$CONFIG_PATH" --force)
+  if [[ -n $version ]]; then args+=(--version "$version"); fi
+  bash "$installer" "${args[@]}" || status=$?
+  rm -rf "$temp_dir"
+  return "$status"
+}
+
+create_backup() {
+  local archive
+  require_root backup
+  install -d -m 0700 "$BACKUP_ROOT"
+  archive="$BACKUP_ROOT/xnode-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+  tar --ignore-failed-read -czf "$archive" "$CONFIG_PATH" /var/lib/xnode 2>/dev/null
+  chmod 0600 "$archive"
+  info "backup created: $archive"
+}
+
+list_backups() {
+  require_root backups
+  if [[ ! -d "$BACKUP_ROOT" ]]; then
+    say "No backups / نسخهٔ پشتیبان وجود ندارد"
+    return
+  fi
+  find "$BACKUP_ROOT" -maxdepth 1 -type f -name 'xnode-*.tar.gz' -printf '%TY-%Tm-%Td %TH:%TM  %10s  %p\n' | sort -r
+}
+
+uninstall_agent() {
+  local purge=${1:-0} answer script temp_dir=""
+  require_root uninstall
+  if [[ $purge == 1 ]]; then
+    printf 'Type PURGE to remove binaries, config, state and logs: '
+    IFS= read -r answer
+    [[ $answer == PURGE ]] || { warn "cancelled"; return; }
+  else
+    printf 'Type REMOVE to uninstall binaries while preserving data: '
+    IFS= read -r answer
+    [[ $answer == REMOVE ]] || { warn "cancelled"; return; }
+  fi
+  script="$LIB_DIR/uninstall.sh"
+  if [[ ! -r "$script" ]]; then
+    temp_dir=$(mktemp -d)
+    script="$temp_dir/uninstall.sh"
+    download "https://raw.githubusercontent.com/$REPO/main/scripts/uninstall.sh" "$script"
+  fi
+  if [[ $purge == 1 ]]; then bash "$script" --purge; else bash "$script"; fi
+  [[ -z $temp_dir ]] || rm -rf "$temp_dir"
+}
+
+show_versions() {
+  local base snapshot
+  say "Management bundle: $(installed_version)"
+  base=$(status_base_url)
+  if snapshot=$(http_get "$base/status" 2>/dev/null); then
+    SNAPSHOT=$snapshot python3 - <<'PY'
+import json, os
+d=json.loads(os.environ["SNAPSHOT"])
+print("Agent:", d.get("agent_version") or "unknown")
+print("Xray:", d.get("xray_version") or "unknown")
+PY
+  elif [[ -x /usr/local/bin/xray ]]; then
+    /usr/local/bin/xray version | head -n 1
+  fi
+}
+
+pause_menu() {
+  [[ -t 0 ]] || return
+  printf '\nPress Enter / برای ادامه Enter بزنید...'
+  IFS= read -r _
+}
+
+menu() {
+  local selection version
+  require_root menu
+  while true; do
+    if [[ -t 1 ]]; then
+      clear
+    fi
+    print_header
+    cat <<'EOF'
+
+  0. Exit / خروج
+──────────────────────────────────────────────────────
+  1. Status / نمایش وضعیت
+  2. Start / شروع سرویس
+  3. Stop / توقف سرویس
+  4. Restart Agent & Xray / راه‌اندازی مجدد
+──────────────────────────────────────────────────────
+  5. Recent agent logs / آخرین لاگ‌های ایجنت
+  6. Follow agent logs / نمایش زندهٔ لاگ‌ها
+  7. Xray access logs / لاگ دسترسی Xray
+  8. Diagnostics / عیب‌یابی کامل
+  9. Test panel connection / تست اتصال پنل
+──────────────────────────────────────────────────────
+ 10. View settings / نمایش تنظیمات
+ 11. Edit connection settings / ویرایش اتصال
+ 12. Update latest / ارتقا به آخرین نسخه
+ 13. Install version or rollback / نصب نسخه یا بازگشت
+──────────────────────────────────────────────────────
+ 14. Create backup / پشتیبان‌گیری
+ 15. List backups / فهرست پشتیبان‌ها
+ 16. Uninstall (keep data) / حذف با حفظ اطلاعات
+ 17. Purge completely / حذف کامل
+EOF
+    printf '\nSelect [0-17] / انتخاب: '
+    IFS= read -r selection || return
+    say
+    case "$selection" in
+      0) return ;;
+      1) show_status || true ;;
+      2) service_action start ;;
+      3) service_action stop ;;
+      4) service_action restart ;;
+      5) show_logs 0 ;;
+      6) show_logs 1 ;;
+      7) show_xray_logs 0 ;;
+      8) doctor || true ;;
+      9) test_panel || true ;;
+      10) show_settings ;;
+      11) configure ;;
+      12) update_agent ;;
+      13) printf 'Version (example v1.0.2): '; IFS= read -r version; [[ -n $version ]] && update_agent "$version" ;;
+      14) create_backup ;;
+      15) list_backups ;;
+      16) uninstall_agent 0; return ;;
+      17) uninstall_agent 1; return ;;
+      *) warn "invalid selection / انتخاب نامعتبر" ;;
+    esac
+    pause_menu
+  done
+}
+
+main() {
+  local command=${1:-menu}
+  [[ $# -eq 0 ]] || shift
+  case "$command" in
+    menu) menu ;;
+    status) require_root status; show_status ;;
+    start|stop|restart) service_action "$command" ;;
+    logs) if [[ ${1:-} == --follow ]]; then show_logs 1; else show_logs 0; fi ;;
+    xray-logs) if [[ ${1:-} == --follow ]]; then show_xray_logs 1; else show_xray_logs 0; fi ;;
+    settings) require_root settings; show_settings ;;
+    configure) configure ;;
+    test-panel) test_panel ;;
+    doctor) doctor ;;
+    update) update_agent "${1:-}" ;;
+    backup) create_backup ;;
+    backups) list_backups ;;
+    uninstall) if [[ ${1:-} == --purge ]]; then uninstall_agent 1; else uninstall_agent 0; fi ;;
+    version) show_versions ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; die "unknown command: $command" ;;
+  esac
+}
+
+main "$@"

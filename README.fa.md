@@ -1,6 +1,6 @@
 <div dir="rtl">
 
-# راهنمای فارسی xnode-agent نسخه ۱.۰.۲
+# راهنمای فارسی xnode-agent نسخه ۱.۱.۰
 
 [English](README.md) | [فارسی](README.fa.md)
 
@@ -21,6 +21,7 @@
 - گزارش کاربران آنلاین، IPها، CPU، RAM، Load و ترافیک شبکه؛
 - health check محلی، restart خودکار و بازگشت به آخرین تنظیمات سالم؛
 - حالت‌های `active`، `draining`، `maintenance` و `disabled`؛
+- منوی دوزبانهٔ `xnode` برای وضعیت، لاگ، عیب‌یابی، ویرایش امن اتصال، ارتقا، rollback، پشتیبان‌گیری و حذف؛
 - systemd، logrotate، permissionهای امن، health check نصب و rollback خودکار.
 
 ## ایجنت چگونه کار می‌کند؟
@@ -74,12 +75,14 @@ curl -fsSL https://raw.githubusercontent.com/mohamadkazemt/xnode-agent/main/scri
 برای فایل تنظیمات آماده یا نسخهٔ مشخص:
 
 ```bash
-sudo bash scripts/install.sh --config ./agent.json --version v1.0.1
+sudo bash scripts/install.sh --config ./agent.json --version v1.1.0
 ```
 
 تنظیمات قبلی بدون `--force` بازنویسی نمی‌شوند. installer فایل release را دانلود و با `SHA256SUMS` بررسی می‌کند و اگر نصب یا health check شکست بخورد، فایل‌های قبلی را برمی‌گرداند.
 
-راهنمای کامل نصب و حذف: [docs/fa/DEPLOYMENT.md](docs/fa/DEPLOYMENT.md)
+پس از نصب نسخهٔ `v1.1.0` یا جدیدتر، منوی مدیریت با `sudo xnode` اجرا می‌شود.
+راهنمای کامل: [نصب و حذف](docs/fa/DEPLOYMENT.md) و
+[منوی مدیریت سرور](docs/fa/MANAGEMENT.md).
 
 ## اتصال ایجنت به پنل
 
@@ -232,7 +235,7 @@ sudo bash install.sh --config /etc/xnode/agent.json --force
 نصب نسخهٔ مشخص:
 
 ```bash
-sudo bash install.sh --config /etc/xnode/agent.json --version v1.0.1 --force
+sudo bash install.sh --config /etc/xnode/agent.json --version v1.1.0 --force
 ```
 
 حذف برنامه با حفظ تنظیمات و داده‌ها:
