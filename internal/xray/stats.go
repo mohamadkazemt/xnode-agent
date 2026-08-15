@@ -36,6 +36,9 @@ func ParseStats(b []byte) ([]model.TrafficRecord, error) {
 	}
 	res := make([]model.TrafficRecord, 0, len(env.Stat))
 	for _, s := range env.Stat {
+		if s.Value == nil {
+			continue
+		}
 		v, err := toInt64(s.Value)
 		if err != nil {
 			return nil, fmt.Errorf("stat %s: %w", s.Name, err)

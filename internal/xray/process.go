@@ -291,9 +291,21 @@ func (m *Manager) Version(ctx context.Context) string {
 	if err != nil {
 		return ""
 	}
+	return conciseVersionLine(out)
+}
+
+func conciseVersionLine(out []byte) string {
 	line := strings.TrimSpace(string(out))
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = line[:i]
+	}
+	fields := strings.Fields(line)
+	if len(fields) >= 2 && strings.EqualFold(fields[0], "xray") {
+		line = fields[0] + " " + fields[1]
+	}
+	runes := []rune(line)
+	if len(runes) > 64 {
+		line = string(runes[:64])
 	}
 	return line
 }
