@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/mohamadkazemt/xnode-agent/main/scri
 فایل config آماده و pin کردن نسخه:
 
 ```bash
-sudo bash scripts/install.sh --config ./agent.json --version v1.0.1
+sudo bash scripts/install.sh --config ./agent.json --version v1.1.0
 ```
 
 گزینه‌ها:
@@ -53,6 +53,9 @@ installer معماری را تشخیص می‌دهد، archive رسمی را د�
 ```text
 /usr/local/bin/xnode-agent
 /usr/local/bin/xray
+/usr/local/bin/xnode                   (منوی مدیریت در v1.1.0+)
+/usr/local/lib/xnode/uninstall.sh
+/usr/local/lib/xnode/VERSION
 /etc/xnode/agent.json             (0600)
 /etc/systemd/system/xnode-agent.service
 /etc/logrotate.d/xnode
@@ -61,6 +64,15 @@ installer معماری را تشخیص می‌دهد، archive رسمی را د�
 ```
 
 دایرکتوری‌های config و data با mode `0700` ساخته می‌شوند. شکست در نصب، شروع سرویس یا health check باعث rollback فایل‌های مدیریت‌شده می‌شود.
+
+بعد از نصب، منوی دوزبانه را اجرا کنید:
+
+```bash
+sudo xnode
+```
+
+دستورها، ویرایش امن اتصال، عیب‌یابی، ارتقا، پشتیبان‌گیری و حذف در
+[راهنمای مدیریت سرور](MANAGEMENT.md) توضیح داده شده‌اند.
 
 ## بررسی نصب
 

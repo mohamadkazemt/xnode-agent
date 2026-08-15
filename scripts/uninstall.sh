@@ -9,7 +9,8 @@ if [[ ${1:-} == "--purge" ]]; then PURGE=1; shift; fi
 if command -v systemctl >/dev/null; then
   systemctl disable --now xnode-agent.service >/dev/null 2>&1 || true
 fi
-rm -f /usr/local/bin/xnode-agent /usr/local/bin/xray
+rm -f /usr/local/bin/xnode-agent /usr/local/bin/xray /usr/local/bin/xnode
+rm -rf /usr/local/lib/xnode
 rm -f /etc/systemd/system/xnode-agent.service /etc/logrotate.d/xnode
 if command -v systemctl >/dev/null; then systemctl daemon-reload >/dev/null 2>&1 || true; fi
 

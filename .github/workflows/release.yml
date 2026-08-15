@@ -42,7 +42,10 @@ jobs:
           mv xnode-agent dist/xnode-agent
           mv xray-bin dist/xray
           cp xnode/VERSION dist/VERSION
-          tar -C dist -czf xnode-v${GITHUB_REF_NAME#v}-linux-${{ matrix.goarch }}.tar.gz xnode-agent xray VERSION
+          cp xnode/scripts/xnode dist/xnode
+          cp xnode/scripts/uninstall.sh dist/xnode-uninstall
+          chmod 0755 dist/xnode dist/xnode-uninstall
+          tar -C dist -czf xnode-v${GITHUB_REF_NAME#v}-linux-${{ matrix.goarch }}.tar.gz xnode-agent xray xnode xnode-uninstall VERSION
       - uses: actions/upload-artifact@v4
         with:
           name: xnode-linux-${{ matrix.goarch }}

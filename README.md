@@ -1,4 +1,4 @@
-# xnode-agent v1.0.2
+# xnode-agent v1.1.0
 
 [English](README.md) | [فارسی](README.fa.md)
 
@@ -52,6 +52,8 @@ The agent additionally enforces:
 
 ### Node management primitives
 
+- Bilingual `xnode` server menu for status, logs, diagnostics, safe connection
+  editing, upgrades/rollback, backups and uninstall.
 - `active`, `draining`, `maintenance`, `disabled` modes.
 - true drain admission: the patched core rejects new authenticated dispatcher sessions while existing sessions are allowed to finish; `drain_ready` becomes true when online users reach the target.
 - traffic-threshold-triggered drain.
@@ -83,7 +85,9 @@ The installer prompts for the node ID, panel URL, and token. For unattended use,
 pass `--node-id`, `--panel-url`, and `--panel-token` after `bash -s --`, or use
 `--config /path/to/agent.json`. It detects amd64/arm64, verifies the release with
 `SHA256SUMS`, installs systemd and logrotate integration, and rolls back a failed
-install. See `docs/DEPLOYMENT.md` for flags, upgrades, and removal.
+install. Release `v1.1.0` and later also installs the management menu; run it
+with `sudo xnode`. See `docs/DEPLOYMENT.md` for installation and
+`docs/MANAGEMENT.md` for every menu command.
 
 ## Panel integration
 
