@@ -225,9 +225,9 @@ PY
 }
 
 wait_for_health() {
-  local base attempt
+  local base
   base=$(status_base_url)
-  for attempt in {1..20}; do
+  for _ in {1..20}; do
     if http_get "$base/healthz" >/dev/null 2>&1; then
       info "health check passed"
       return 0
@@ -544,7 +544,9 @@ menu() {
   local selection version
   require_root menu
   while true; do
-    [[ -t 1 ]] && clear || true
+    if [[ -t 1 ]]; then
+      clear
+    fi
     print_header
     cat <<'EOF'
 
